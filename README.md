@@ -7,7 +7,6 @@
 一个现代化的、高性能的 Yande.re 桌面浏览客户端。基于 Python 和 PyQt6 构建，专为流畅的图片浏览和管理体验而设计。
 
 ![Screenshot](https://via.placeholder.com/800x450?text=Please+Add+A+Screenshot+Here)
-*(建议在此处替换为软件实际运行截图)*
 
 ## ✨ 主要特性
 
@@ -30,7 +29,7 @@
 
 ### 1. 克隆或下载项目
 ```bash
-git clone https://github.com/你的用户名/yande_viewer.git
+git clone https://github.com/Fenglanxii/yande_viewer.git
 cd yande_viewer
 ```
 
