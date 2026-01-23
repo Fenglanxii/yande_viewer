@@ -1,0 +1,10 @@
+__pycache__/
+love/
+
+copier.py
+
+*.pyc
+*.log
+*.tmp
+*.lock
+*.json
