@@ -1,7 +1,12 @@
 __pycache__/
 love/
+build/
+dist/
 
 copier.py
+make.py
+_runtime_hook.py
+yande_viewer.spec
 
 *.pyc
 *.log
