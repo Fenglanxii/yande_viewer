@@ -3,7 +3,7 @@ love/
 build/
 dist/
 
-copyier.py
+copier.py
 make.py
 _runtime_hook.py
 yande_viewer.spec
