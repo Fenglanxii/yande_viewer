@@ -277,6 +277,79 @@ class DownloadManager:
             logger.info("已请求取消 %d 个任务: %s", count, reason)
             return count
 
+    def submit_resume(
+        self,
+        post_id: str,
+        folder: str,
+        base_dir: str,
+        on_complete: Optional[Callable[[str, str], None]] = None,
+        on_error: Optional[Callable[[str, str], None]] = None,
+    ) -> None:
+        """
+        恢复未完成的下载。
+
+        从 API 获取帖子信息后，利用断点续传机制恢复下载。
+        已下载的 .tmp 文件会被自动检测并续传。
+
+        Parameters
+        ----------
+        post_id : str
+            帖子 ID
+        folder : str
+            目标文件夹名称 (Safe/Questionable/Explicit)
+        base_dir : str
+            基础下载目录
+        on_complete : callable, optional
+            完成回调，签名为 (post_id, file_path) -> None
+        on_error : callable, optional
+            错误回调，签名为 (post_id, error_message) -> None
+        """
+        with self._lock:
+            if post_id in self.active_downloads:
+                logger.debug("恢复任务已存在: %s", post_id)
+                return
+
+            self.resuming_count += 1
+
+        def do_resume():
+            try:
+                # 从 API 获取帖子信息
+                resp = self.session.get(
+                    CONFIG.api_url,
+                    params={"tags": f"id:{post_id}"},
+                    timeout=CONFIG.download.timeout,
+                )
+
+                if resp.status_code != 200:
+                    raise Exception(f"API 错误: HTTP {resp.status_code}")
+
+                posts = resp.json()
+                if not posts:
+                    raise Exception(f"未找到帖子: {post_id}")
+
+                post = posts[0]
+
+                # 提交下载任务（断点续传会自动检测 tmp 文件）
+                self.submit_download(
+                    post,
+                    base_dir,
+                    on_complete=on_complete,
+                    on_error=on_error,
+                )
+
+            except Exception as e:
+                logger.error("恢复下载失败 [%s]: %s", post_id, e)
+                if on_error:
+                    try:
+                        on_error(post_id, str(e))
+                    except Exception:
+                        pass
+            finally:
+                with self._lock:
+                    self.resuming_count = max(0, self.resuming_count - 1)
+
+        self.executor.submit(do_resume)
+
     def _execute_download(self, task: DownloadTask) -> None:
         """执行下载任务（内部方法）。"""
         post_id = task.post_id

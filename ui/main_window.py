@@ -514,6 +514,135 @@ class MainWindow(QMainWindow):
         self.mode = dialog.result if dialog.result else MODE_LATEST
         self._start_with_mode()
     
+    def _resume_tmp_downloads(self) -> None:
+        """恢复未完成的下载任务。"""
+        if not self.pending_tmp_files:
+            return
+        
+        self.log(
+            f"🔄 恢复 {len(self.pending_tmp_files)} 个下载...",
+            TOKENS.colors.warning
+        )
+        
+        for tmp_info in self.pending_tmp_files:
+            self.download_manager.submit_resume(
+                tmp_info['id'],
+                tmp_info['folder'],
+                CONFIG.base_dir,
+                on_complete=self._on_download_complete,
+                on_error=self._on_download_error
+            )
+
+    def _check_missing_favorites(self) -> List[Dict]:
+        """
+        检测收藏夹中缺失的图片。
+        
+        对比 favorites.json 与 love 文件夹中的实际文件，
+        找出已收藏但未完成下载的项目。
+        
+        Returns:
+            缺失项目列表，每项包含 id, data, has_tmp 键
+        """
+        missing = []
+        
+        with self._state_lock():
+            favorites_copy = dict(self.favorites)
+            downloaded_copy = set(self.downloaded_ids)
+        
+        # 构建 tmp 文件 ID 集合
+        tmp_ids = {tmp['id'] for tmp in self.pending_tmp_files}
+        
+        for post_id, fav_data in favorites_copy.items():
+            # 跳过已下载的
+            if post_id in downloaded_copy:
+                continue
+            
+            missing.append({
+                'id': post_id,
+                'data': fav_data,
+                'has_tmp': post_id in tmp_ids
+            })
+        
+        return missing
+
+    def _recover_missing_favorites(self) -> None:
+        """
+        恢复缺失的收藏下载。
+        
+        自动检测 favorites.json 中存在但 love 文件夹中缺失的图片，
+        并启动下载任务。优先使用已保存的 file_url，否则从 API 获取。
+        """
+        missing = self._check_missing_favorites()
+        
+        if not missing:
+            logger.info("所有收藏已完整下载")
+            return
+        
+        # 区分有 tmp 文件的和完全缺失的
+        with_tmp = [m for m in missing if m['has_tmp']]
+        without_tmp = [m for m in missing if not m['has_tmp']]
+        
+        total = len(missing)
+        self.log(
+            f"🔍 发现 {total} 个缺失收藏 "
+            f"({len(with_tmp)} 个有断点, {len(without_tmp)} 个需重新下载)",
+            TOKENS.colors.warning
+        )
+        
+        # 记录到日志
+        logger.info(
+            "检测到 %d 个缺失的收藏: %d 个可断点续传, %d 个需重新下载",
+            total, len(with_tmp), len(without_tmp)
+        )
+        
+        recovered_count = 0
+        
+        for item in missing:
+            post_id = item['id']
+            fav_data = item['data']
+            
+            # 确定评级对应的文件夹
+            rating = fav_data.get('rating', 'q')
+            folder = {'s': 'Safe', 'q': 'Questionable', 'e': 'Explicit'}.get(
+                rating, 'Questionable'
+            )
+            
+            # 如果收藏数据包含完整的 file_url，直接构造 post 对象下载
+            file_url = fav_data.get('file_url', '')
+            
+            if file_url and url_validator.validate(file_url):
+                # 构造完整的 post 对象
+                post = {
+                    'id': int(post_id),
+                    'file_url': file_url,
+                    'tags': fav_data.get('tags', ''),
+                    'rating': rating,
+                }
+                
+                self.download_manager.submit_download(
+                    post,
+                    CONFIG.base_dir,
+                    on_complete=self._on_download_complete,
+                    on_error=self._on_download_error
+                )
+                recovered_count += 1
+            else:
+                # 需要从 API 获取完整信息
+                self.download_manager.submit_resume(
+                    post_id,
+                    folder,
+                    CONFIG.base_dir,
+                    on_complete=self._on_download_complete,
+                    on_error=self._on_download_error
+                )
+                recovered_count += 1
+        
+        if recovered_count > 0:
+            self.log(
+                f"✅ 已提交 {recovered_count} 个恢复任务",
+                TOKENS.colors.success
+            )
+
     def _start_with_mode(self) -> None:
         """
         根据选定模式启动应用。
@@ -533,38 +662,16 @@ class MainWindow(QMainWindow):
         else:
             self.log("🆕 最新模式", TOKENS.colors.info)
         
-        # 延迟恢复未完成的下载
+        # 延迟恢复未完成的下载（tmp 文件）
         if self.pending_tmp_files:
             QTimer.singleShot(1000, self._resume_tmp_downloads)
+        
+        # 延迟检测并恢复缺失的收藏（在 tmp 恢复之后）
+        QTimer.singleShot(2000, self._recover_missing_favorites)
         
         # 开始加载数据
         self.load_more_posts(is_startup=True)
         self.status_timer.start(300)
-    
-    def _restore_browse_history(self) -> None:
-        """恢复上次的浏览历史。"""
-        if self.saved_browse_history:
-            self.browse_history = self.saved_browse_history.copy()
-            self.history_index = len(self.browse_history) - 1
-    
-    def _resume_tmp_downloads(self) -> None:
-        """恢复未完成的下载任务。"""
-        if not self.pending_tmp_files:
-            return
-        
-        self.log(
-            f"🔄 恢复 {len(self.pending_tmp_files)} 个下载...",
-            TOKENS.colors.warning
-        )
-        
-        for tmp_info in self.pending_tmp_files:
-            self.download_manager.submit_resume(
-                tmp_info['id'],
-                tmp_info['folder'],
-                CONFIG.base_dir,
-                on_complete=self._on_download_complete,
-                on_error=self._on_download_error
-            )
     
     # =========================================================================
     # 快捷键设置
@@ -584,6 +691,7 @@ class MainWindow(QMainWindow):
         - S：切换模式
         - P：设置
         - B：备份
+        - C：检测并恢复缺失的收藏
         - 1-5：快速设置分数筛选
         - F1/?：帮助
         """
@@ -600,6 +708,7 @@ class MainWindow(QMainWindow):
             Qt.Key.Key_S: self.switch_mode,
             Qt.Key.Key_P: self.show_settings,
             Qt.Key.Key_B: self.show_backup_dialog,
+            Qt.Key.Key_C: self._recover_missing_favorites,  # 新增：手动检测缺失
             Qt.Key.Key_1: lambda: self._quick_set_score(0),
             Qt.Key.Key_2: lambda: self._quick_set_score(5),
             Qt.Key.Key_3: lambda: self._quick_set_score(15),
