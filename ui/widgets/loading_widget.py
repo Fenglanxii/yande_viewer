@@ -5,7 +5,7 @@
 和带文字提示的加载面板。基于 PyQt6 实现，使用 Qt 定时器
 驱动动画效果。
 
-版权所有 (c) 2024 Yande Viewer Team
+版权所有 (c) 2026 Yande Viewer Team
 遵循 MIT 许可证发布
 
 组件:

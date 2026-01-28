@@ -4,7 +4,7 @@ Yande.re Ultimate Viewer - 主窗口模块
 本模块实现了应用程序的主窗口界面，提供图像浏览、收藏管理、
 筛选控制等核心功能。基于 PyQt6 构建，支持键盘快捷键操作。
 
-版权所有 (c) 2024 Yande Viewer Team
+版权所有 (c) 2026 Yande Viewer Team
 遵循 MIT 许可证发布
 
 模块功能:
