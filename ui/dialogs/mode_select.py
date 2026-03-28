@@ -45,11 +45,12 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Optional, Protocol
 
 from PyQt6.QtCore import QCoreApplication, Qt, pyqtSignal
-from PyQt6.QtGui import QCursor, QKeyEvent, QShowEvent
+from PyQt6.QtGui import QCursor, QKeyEvent, QMouseEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -78,10 +79,7 @@ MODE_CONTINUE: Final[str] = "continue"
 
 
 class ColorTokensProtocol(Protocol):
-    """颜色令牌协议，定义必需的颜色属性。
-
-    所有颜色值应为有效的 CSS 颜色字符串（十六进制、rgb 等）。
-    """
+    """颜色令牌协议，定义必需的颜色属性。"""
 
     bg_base: str
     bg_surface: str
@@ -95,10 +93,7 @@ class ColorTokensProtocol(Protocol):
 
 
 class TypographyTokensProtocol(Protocol):
-    """排版令牌协议，定义必需的字体属性。
-
-    字体值应为有效的 CSS font-family 字符串。
-    """
+    """排版令牌协议，定义必需的字体属性。"""
 
     font_primary: str
     font_icon: str
@@ -111,10 +106,7 @@ class LayoutTokensProtocol(Protocol):
 
 
 class DesignTokensProtocol(Protocol):
-    """设计令牌完整协议。
-
-    外部令牌提供者必须实现此接口才能与对话框的样式系统兼容。
-    """
+    """设计令牌完整协议。"""
 
     colors: ColorTokensProtocol
     typography: TypographyTokensProtocol
@@ -123,21 +115,7 @@ class DesignTokensProtocol(Protocol):
 
 @dataclass(frozen=True)
 class DefaultColorTokens:
-    """默认颜色令牌，作为备用值使用。
-
-    这些颜色遵循深色主题设计，专为图片浏览应用优化，可减少眼睛疲劳。
-
-    属性：
-        bg_base: 对话框主背景色
-        bg_surface: 提升表面背景（禁用按钮等）
-        text_primary: 主要文本颜色，用于高对比度可读性
-        text_muted: 次要文本颜色，用于不太突出的信息
-        info: 信息元素强调色（最新模式按钮）
-        primary_hover: 主要操作的悬停状态
-        success: 成功指示色（续看模式按钮）
-        success_muted: 成功元素的悬停状态
-        warning: 警告指示色
-    """
+    """默认颜色令牌，作为备用值使用。"""
 
     bg_base: str = "#1E1E1E"
     bg_surface: str = "#2D2D30"
@@ -152,14 +130,7 @@ class DefaultColorTokens:
 
 @dataclass(frozen=True)
 class DefaultTypographyTokens:
-    """默认排版令牌，作为备用值使用。
-
-    使用系统无衬线字体以实现最大平台兼容性。
-
-    属性：
-        font_primary: 正文主要字体族
-        font_icon: 包含图标的文本字体族（emoji 回退）
-    """
+    """默认排版令牌，作为备用值使用。"""
 
     font_primary: str = "sans-serif"
     font_icon: str = "sans-serif"
@@ -167,27 +138,14 @@ class DefaultTypographyTokens:
 
 @dataclass(frozen=True)
 class DefaultLayoutTokens:
-    """默认布局令牌，作为备用值使用。
-
-    属性：
-        radius_md: 按钮和容器的中等圆角半径
-    """
+    """默认布局令牌，作为备用值使用。"""
 
     radius_md: int = 6
 
 
 @dataclass(frozen=True)
 class DefaultDesignTokens:
-    """完整的默认设计令牌容器。
-
-    当外部设计令牌不可用或验证失败时，提供完整的备用值集合。
-    所有嵌套的令牌类都使用各自的默认值创建。
-
-    示例::
-
-        tokens = DefaultDesignTokens()
-        print(tokens.colors.bg_base)  # '#1E1E1E'
-    """
+    """完整的默认设计令牌容器。"""
 
     colors: DefaultColorTokens = field(default_factory=DefaultColorTokens)
     typography: DefaultTypographyTokens = field(
@@ -197,26 +155,7 @@ class DefaultDesignTokens:
 
 
 def _validate_tokens(tokens: Any) -> bool:
-    """验证令牌对象是否具有所有必需的属性。
-
-    执行令牌结构的全面验证，包括：
-    - 所有必需嵌套对象的存在性（colors、typography、layout）
-    - 每个嵌套对象内所有必需属性的存在性
-    - 每个属性值的类型验证
-    - 颜色和字体值的非空字符串验证
-
-    参数：
-        tokens: 要验证的令牌对象。可以是任何可能实现
-            DesignTokensProtocol 的对象。
-
-    返回：
-        如果所有必需属性存在且通过类型/值检查，返回 True；
-        否则返回 False。验证期间发生任何异常也返回 False。
-
-    注意：
-        此函数捕获所有异常以确保可靠的回退行为。
-        验证失败会记录在调试级别日志中。
-    """
+    """验证令牌对象是否具有所有必需的属性。"""
     required_colors = [
         "bg_base",
         "bg_surface",
@@ -232,7 +171,6 @@ def _validate_tokens(tokens: Any) -> bool:
     required_layout = ["radius_md"]
 
     try:
-        # 验证 colors 命名空间
         if not hasattr(tokens, "colors"):
             logger.debug("令牌验证失败：缺少 'colors' 属性")
             return False
@@ -246,7 +184,6 @@ def _validate_tokens(tokens: Any) -> bool:
                 logger.debug("令牌验证失败：colors.%s 值无效", attr)
                 return False
 
-        # 验证 typography 命名空间
         if not hasattr(tokens, "typography"):
             logger.debug("令牌验证失败：缺少 'typography' 属性")
             return False
@@ -260,7 +197,6 @@ def _validate_tokens(tokens: Any) -> bool:
                 logger.debug("令牌验证失败：typography.%s 值无效", attr)
                 return False
 
-        # 验证 layout 命名空间
         if not hasattr(tokens, "layout"):
             logger.debug("令牌验证失败：缺少 'layout' 属性")
             return False
@@ -282,20 +218,7 @@ def _validate_tokens(tokens: Any) -> bool:
 
 
 def _get_tokens() -> DesignTokensProtocol:
-    """安全获取设计令牌，带验证和回退机制。
-
-    尝试从配置模块导入外部设计令牌，验证其结构完整性，
-    必要时回退到内置默认值。
-
-    该函数处理三种失败场景：
-    1. ImportError：外部令牌模块不可用
-    2. 验证失败：令牌存在但不完整/无效
-    3. 意外异常：加载期间的任何其他错误
-
-    返回：
-        实现 DesignTokensProtocol 的有效设计令牌对象。
-        如果外部令牌不可用或无效，返回 DefaultDesignTokens()。
-    """
+    """安全获取设计令牌，带验证和回退机制。"""
     try:
         from config.design_tokens import TOKENS
 
@@ -325,25 +248,13 @@ TOKENS: Final[DesignTokensProtocol] = _get_tokens()
 
 
 def _build_dialog_stylesheet() -> str:
-    """构建完整的对话框样式表。
-
-    创建集中式样式表，使用对象名称和动态属性为对话框中的
-    所有组件设置样式。
-
-    重要设计决策：
-    - 使用 border 而非 outline 实现焦点指示，避免跨平台兼容性问题
-    - 显式设置 outline: none 移除系统默认焦点框
-    - 通过动态属性 [mode="..."] 实现模式特定样式
-
-    返回：
-        对话框的完整 CSS 样式表字符串。
-    """
+    """构建完整的对话框样式表。"""
     return f"""
         /* ============================================
-           对话框容器
+           对话框容器（透明外层）
            ============================================ */
         QDialog {{
-            background-color: {TOKENS.colors.bg_base};
+            background-color: transparent;
         }}
 
         QFrame {{
@@ -351,53 +262,105 @@ def _build_dialog_stylesheet() -> str:
         }}
 
         /* ============================================
+           卡片容器
+           ============================================ */
+        QFrame#card {{
+            background-color: #24262B;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+        }}
+
+        /* ============================================
+           关闭按钮
+           ============================================ */
+        QPushButton#close_btn {{
+            background-color: transparent;
+            color: #6B7280;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            padding: 0px;
+            min-width: 28px;
+            min-height: 28px;
+            max-width: 28px;
+            max-height: 28px;
+        }}
+
+        QPushButton#close_btn:hover {{
+            background-color: rgba(255, 255, 255, 0.08);
+            color: #F2F3F5;
+        }}
+
+        QPushButton#close_btn:pressed {{
+            background-color: rgba(255, 255, 255, 0.12);
+        }}
+
+        /* ============================================
            标签样式（基于角色）
            ============================================ */
 
         QLabel[role="title"] {{
-            color: {TOKENS.colors.text_primary};
-            font-family: {TOKENS.typography.font_icon};
-            font-size: 16px;
-            font-weight: bold;
+            color: #F2F3F5;
+            font-family: {TOKENS.typography.font_primary};
+            font-size: 18px;
+            font-weight: 600;
         }}
 
         QLabel[role="subtitle"] {{
-            color: {TOKENS.colors.text_muted};
+            color: #A8ADB4;
             font-family: {TOKENS.typography.font_primary};
-            font-size: 11px;
+            font-size: 12px;
         }}
 
-        QLabel[role="warning"] {{
-            color: {TOKENS.colors.warning};
+        QLabel[role="btn_main"] {{
+            color: #F2F3F5;
             font-family: {TOKENS.typography.font_primary};
-            font-size: 9px;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+
+        QLabel[role="btn_sub"] {{
+            color: rgba(255, 255, 255, 0.72);
+            font-family: {TOKENS.typography.font_primary};
+            font-size: 10px;
+        }}
+
+        QLabel[role="btn_sub_disabled"] {{
+            color: #A8ADB4;
+            font-family: {TOKENS.typography.font_primary};
+            font-size: 10px;
+        }}
+
+        QLabel[role="info"] {{
+            color: #6B7280;
+            font-family: {TOKENS.typography.font_primary};
+            font-size: 10px;
         }}
 
         QLabel[role="hint"] {{
-            color: {TOKENS.colors.text_muted};
-            font-size: 9px;
+            color: #4B5563;
+            font-family: {TOKENS.typography.font_primary};
+            font-size: 10px;
         }}
 
         /* ============================================
            按钮样式（基于模式）
-           注意：使用 border 替代 outline 以确保
-           跨平台一致的焦点样式显示
            ============================================ */
 
-        /* 最新模式按钮 - 信息/主要配色 */
+        /* 最新模式按钮 */
         QPushButton[mode="latest"] {{
             background-color: {TOKENS.colors.info};
             color: {TOKENS.colors.text_primary};
-            font-family: {TOKENS.typography.font_icon};
-            font-size: 11px;
+            font-size: 12px;
             border: 2px solid transparent;
-            border-radius: {TOKENS.layout.radius_md}px;
-            padding: 8px 16px;
+            border-radius: 10px;
+            padding: 10px 16px;
             outline: none;
         }}
 
         QPushButton[mode="latest"]:hover {{
             background-color: {TOKENS.colors.primary_hover};
+            border: 2px solid rgba(33, 150, 243, 0.35);
         }}
 
         QPushButton[mode="latest"]:pressed {{
@@ -405,23 +368,23 @@ def _build_dialog_stylesheet() -> str:
         }}
 
         QPushButton[mode="latest"]:focus {{
-            border: 2px solid {TOKENS.colors.text_primary};
+            border: 2px solid rgba(33, 150, 243, 0.5);
         }}
 
-        /* 续看模式按钮（启用状态） - 成功配色 */
+        /* 续看模式按钮（启用状态） */
         QPushButton[mode="continue"]:enabled {{
             background-color: {TOKENS.colors.success};
             color: {TOKENS.colors.text_primary};
-            font-family: {TOKENS.typography.font_icon};
-            font-size: 11px;
+            font-size: 12px;
             border: 2px solid transparent;
-            border-radius: {TOKENS.layout.radius_md}px;
-            padding: 8px 16px;
+            border-radius: 10px;
+            padding: 10px 16px;
             outline: none;
         }}
 
         QPushButton[mode="continue"]:enabled:hover {{
             background-color: {TOKENS.colors.success_muted};
+            border: 2px solid rgba(76, 175, 80, 0.35);
         }}
 
         QPushButton[mode="continue"]:enabled:pressed {{
@@ -429,18 +392,17 @@ def _build_dialog_stylesheet() -> str:
         }}
 
         QPushButton[mode="continue"]:enabled:focus {{
-            border: 2px solid {TOKENS.colors.text_primary};
+            border: 2px solid rgba(76, 175, 80, 0.5);
         }}
 
-        /* 续看模式按钮（禁用状态） - 柔和外观 */
+        /* 续看模式按钮（禁用状态） */
         QPushButton[mode="continue"]:disabled {{
-            background-color: {TOKENS.colors.bg_surface};
-            color: {TOKENS.colors.text_muted};
-            font-family: {TOKENS.typography.font_icon};
-            font-size: 11px;
+            background-color: #2D3036;
+            color: #6B7280;
+            font-size: 12px;
             border: 2px solid transparent;
-            border-radius: {TOKENS.layout.radius_md}px;
-            padding: 8px 16px;
+            border-radius: 10px;
+            padding: 10px 16px;
             outline: none;
         }}
     """
@@ -448,6 +410,45 @@ def _build_dialog_stylesheet() -> str:
 
 # 缓存的样式表（模块加载时构建一次）
 _DIALOG_STYLESHEET: Final[str] = _build_dialog_stylesheet()
+
+
+# ============================================================================
+# 辅助组件
+# ============================================================================
+
+
+class _CardButton(QPushButton):
+    """支持鼠标拖动窗口的卡片按钮。
+
+    用于实现无边框窗口的拖动移动功能。
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._drag_pos: Optional[Any] = None
+        self._dragging = False
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint()
+            self._dragging = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._drag_pos is not None:
+            diff = event.globalPosition().toPoint() - self._drag_pos
+            if diff.manhattanLength() > 3:
+                self._dragging = True
+                window = self.window()
+                if window:
+                    window.move(window.pos() + diff)
+                self._drag_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._drag_pos = None
+        self._dragging = False
+        super().mouseReleaseEvent(event)
 
 
 # ============================================================================
@@ -472,31 +473,16 @@ class ModeSelectDialog(QDialog):
         MIN_DIALOG_HEIGHT: 对话框最小高度（逻辑像素）
         MIN_BUTTON_WIDTH: 按钮最小宽度（逻辑像素）
         MIN_BUTTON_HEIGHT: 按钮最小高度（逻辑像素）
-
-    示例::
-
-        dialog = ModeSelectDialog(
-            parent=main_window,
-            has_history=True,
-            last_session={"viewed_count": 50, "last_viewed_id": 12345}
-        )
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            mode = dialog.get_result()
-            if mode == MODE_LATEST:
-                start_from_latest()
-            elif mode == MODE_CONTINUE:
-                resume_browsing()
     """
 
     # 用户选择模式时发出的信号
     mode_selected = pyqtSignal(str)
 
     # 布局约束（DPI 自适应的最小值）
-    MIN_DIALOG_WIDTH: ClassVar[int] = 380
-    MIN_DIALOG_HEIGHT: ClassVar[int] = 320
-    MIN_BUTTON_WIDTH: ClassVar[int] = 240
-    MIN_BUTTON_HEIGHT: ClassVar[int] = 56
+    MIN_DIALOG_WIDTH: ClassVar[int] = 400
+    MIN_DIALOG_HEIGHT: ClassVar[int] = 360
+    MIN_BUTTON_WIDTH: ClassVar[int] = 260
+    MIN_BUTTON_HEIGHT: ClassVar[int] = 68
 
     def __init__(
         self,
@@ -509,16 +495,9 @@ class ModeSelectDialog(QDialog):
 
         参数：
             parent: 用于模态显示和居中的父窗口。
-                如果为 None，对话框将居中于主屏幕。
-            has_history: 是否存在浏览历史。为 False 时，
-                续看按钮将被禁用并显示解释性工具提示。
+            has_history: 是否存在浏览历史。为 False 时，续看按钮将被禁用。
             last_session: 包含上次会话信息的字典。
-                预期键：
-                - viewed_count (int): 上次会话中查看的图片数量
-                - last_viewed_id (int): 上次查看的图片 ID
-                如果为 None 或为空，显示通用续看文本。
             tmp_count: 上次会话中未完成的下载数量。
-                如果大于 0，显示关于自动恢复下载的警告消息。
         """
         super().__init__(parent)
 
@@ -546,18 +525,8 @@ class ModeSelectDialog(QDialog):
 
     @staticmethod
     def _validate_bool(value: Any, name: str) -> bool:
-        """验证并将值转换为布尔值。
-
-        参数：
-            value: 要验证和转换的值
-            name: 用于诊断日志的参数名称
-
-        返回：
-            验证后的布尔值
-        """
         if isinstance(value, bool):
             return value
-
         logger.warning(
             "参数 '%s' 应为 bool 类型，实际为 %s；正在自动转换",
             name,
@@ -567,15 +536,6 @@ class ModeSelectDialog(QDialog):
 
     @staticmethod
     def _validate_non_negative_int(value: Any, name: str) -> int:
-        """验证并将值转换为非负整数。
-
-        参数：
-            value: 要验证和转换的值
-            name: 用于诊断日志的参数名称
-
-        返回：
-            验证后的非负整数，无效输入默认为 0
-        """
         if not isinstance(value, int):
             logger.warning(
                 "参数 '%s' 应为 int 类型，实际为 %s；正在自动转换",
@@ -595,185 +555,186 @@ class ModeSelectDialog(QDialog):
         return value
 
     def _setup_window(self) -> None:
-        """配置窗口属性并应用样式表。
-
-        设置窗口标题、最小尺寸、窗口标志和样式表。
-        """
+        """配置窗口属性并应用样式表。"""
         self.setWindowTitle(self._tr("选择浏览模式"))
         self.setMinimumSize(self.MIN_DIALOG_WIDTH, self.MIN_DIALOG_HEIGHT)
 
-        # 移除标题栏上的帮助按钮
+        # 无边框 + 透明背景
         self.setWindowFlags(
-            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
+            Qt.WindowType.Dialog
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.CustomizeWindowHint
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         # 应用样式表
         self.setStyleSheet(_DIALOG_STYLESHEET)
 
     def _setup_ui(self) -> None:
-        """构建完整的用户界面。
+        """构建完整的用户界面。三段式层级：顶部标题、中部按钮、底部信息。"""
+        # 外层透明容器
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
 
-        包含标题区域、警告区域（条件性）、按钮区域和提示区域。
-        """
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(20, 20, 20, 20)
+        # 卡片容器
+        card = QFrame()
+        card.setObjectName("card")
+        outer.addWidget(card)
 
-        # 标题区域
+        # 卡片内部布局
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(24, 20, 24, 16)
+        layout.setSpacing(0)
+
+        # 顶部区域：标题 + 关闭按钮
         self._create_header(layout)
 
-        # 未完成下载警告（条件性）
-        if self._tmp_count > 0:
-            self._create_warning(layout)
+        layout.addSpacing(28)
 
-        layout.addSpacing(15)
-
-        # 模式选择按钮
+        # 中部区域：两个大按钮
         self._create_buttons(layout)
 
-        # 首次使用提示（条件性）
-        if not self._has_history:
-            self._create_hint(layout)
-
         layout.addStretch()
+
+        # 底部区域：下载提示 + 快捷键提示
+        self._create_footer(layout)
+
         self.adjustSize()
 
     def _create_header(self, layout: QVBoxLayout) -> None:
-        """创建标题区域。
+        """创建顶部标题区域，包含主标题、副标题和关闭按钮。"""
+        # 标题行：标题 + 关闭按钮
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(0)
 
-        参数：
-            layout: 父布局
-        """
-        title = QLabel(self._tr("🎨 Yande.re Viewer"))
+        # 主标题（支持拖动窗口）
+        title = _CardButton(self._tr("Yande.re Viewer"))
         title.setProperty("role", "title")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
+        title.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        title.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        title.setStyleSheet(
+            "QPushButton { background: transparent; border: none; "
+            "text-align: left; padding: 0; }"
+        )
+        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        title_row.addWidget(title)
 
-        subtitle = QLabel(self._tr("选择浏览模式"))
+        title_row.addStretch()
+
+        # 关闭按钮
+        close_btn = QPushButton("\u2715")
+        close_btn.setObjectName("close_btn")
+        close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close_btn.clicked.connect(self.reject)
+        title_row.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignTop)
+
+        layout.addLayout(title_row)
+
+        # 副标题
+        subtitle = QLabel(self._tr("选择开始方式"))
         subtitle.setProperty("role", "subtitle")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
-    def _create_warning(self, layout: QVBoxLayout) -> None:
-        """创建未完成下载警告。
-
-        参数：
-            layout: 父布局
-        """
-        warning_text = self._tr(
-            "⚠️ 发现 {count} 个未完成下载，启动后将自动恢复"
-        ).format(count=self._tmp_count)
-
-        warn_label = QLabel(warning_text)
-        warn_label.setProperty("role", "warning")
-        warn_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        warn_label.setWordWrap(True)
-        layout.addWidget(warn_label)
-
     def _create_buttons(self, layout: QVBoxLayout) -> None:
-        """创建模式选择按钮。
-
-        参数：
-            layout: 父布局
-        """
-        btn_frame = QFrame()
-        btn_layout = QVBoxLayout(btn_frame)
-        btn_layout.setSpacing(10)
-
+        """创建模式选择按钮区域。"""
         # 最新模式按钮（始终可用）
         self._btn_latest = self._create_mode_button(
-            text=self._tr("🆕 最新模式\n从最新发布的图片开始"),
+            main_text=self._tr("查看最新"),
+            sub_text=self._tr("从最新发布的图片开始"),
             mode=MODE_LATEST,
             enabled=True,
         )
-        btn_layout.addWidget(
-            self._btn_latest, alignment=Qt.AlignmentFlag.AlignCenter
-        )
+        layout.addWidget(self._btn_latest)
+
+        layout.addSpacing(10)
 
         # 续看模式按钮（需要历史记录）
-        continue_text = self._get_continue_button_text()
         self._btn_continue = self._create_mode_button(
-            text=continue_text,
+            main_text=self._tr("继续上次浏览"),
+            sub_text=self._get_continue_sub_text(),
             mode=MODE_CONTINUE,
             enabled=self._has_history,
         )
-        btn_layout.addWidget(
-            self._btn_continue, alignment=Qt.AlignmentFlag.AlignCenter
-        )
+        layout.addWidget(self._btn_continue)
 
-        layout.addWidget(btn_frame)
-
-    def _get_continue_button_text(self) -> str:
-        """生成续看按钮文本。
-
-        返回：
-            格式化的按钮文本
-        """
-        base_text = self._tr("📖 续看模式") + "\n"
+    def _get_continue_sub_text(self) -> str:
+        """生成续看按钮副文案。"""
+        if not self._has_history:
+            return self._tr("暂无历史记录")
 
         if self._last_session:
             viewed = self._last_session.get("viewed_count", 0)
             last_id = self._last_session.get("last_viewed_id", "?")
-            detail = self._tr("已看{count}张，上次: ID {id}").format(
+            return self._tr("已看 {count} 张 · 上次位置 ID {id}").format(
                 count=viewed, id=last_id
             )
-            return base_text + detail
 
-        return base_text + self._tr("从上次位置继续浏览")
+        return self._tr("从上次位置继续浏览")
 
     def _create_mode_button(
         self,
-        text: str,
+        main_text: str,
+        sub_text: str,
         mode: str,
         enabled: bool,
     ) -> QPushButton:
-        """创建模式选择按钮。
-
-        参数：
-            text: 按钮显示文本
-            mode: 模式标识符（用于样式匹配）
-            enabled: 是否启用
-
-        返回：
-            配置好的按钮实例
-        """
-        btn = QPushButton(text)
+        """创建模式选择按钮（主文案 + 副文案合并为按钮文本）。"""
+        btn = QPushButton()
         btn.setProperty("mode", mode)
         btn.setMinimumSize(self.MIN_BUTTON_WIDTH, self.MIN_BUTTON_HEIGHT)
         btn.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
         )
         btn.setEnabled(enabled)
-
-        # 关键修复：禁用自动默认行为以避免系统焦点边框
         btn.setAutoDefault(False)
         btn.setDefault(False)
+
+        # 构建按钮内部布局
+        btn_layout = QVBoxLayout(btn)
+        btn_layout.setContentsMargins(16, 10, 16, 10)
+        btn_layout.setSpacing(2)
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        main_label = QLabel(main_text)
+        main_label.setProperty("role", "btn_main")
+        main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_layout.addWidget(main_label)
+
+        sub_label = QLabel(sub_text)
+        sub_label.setProperty("role", "btn_sub" if enabled else "btn_sub_disabled")
+        sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_layout.addWidget(sub_label)
 
         if enabled:
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn.clicked.connect(lambda: self._select_mode(mode))
-        else:
-            btn.setToolTip(self._tr("无浏览历史记录，无法使用续看模式"))
 
         return btn
 
-    def _create_hint(self, layout: QVBoxLayout) -> None:
-        """创建首次使用提示。
+    def _create_footer(self, layout: QVBoxLayout) -> None:
+        """创建底部辅助信息区域（下载提示 + 快捷键提示）。"""
+        # 下载恢复提示（条件性）
+        if self._tmp_count > 0:
+            info_text = self._tr(
+                "将自动恢复 {count} 个未完成下载"
+            ).format(count=self._tmp_count)
+            info_label = QLabel(info_text)
+            info_label.setProperty("role", "info")
+            info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(info_label)
+            layout.addSpacing(4)
 
-        参数：
-            layout: 父布局
-        """
-        hint = QLabel(self._tr("（首次使用，无历史记录）"))
-        hint.setProperty("role", "hint")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(hint)
+        # 快捷键提示
+        hint_text = self._tr("快捷键：1 查看最新 · 2 继续浏览 · Esc 关闭")
+        hint_label = QLabel(hint_text)
+        hint_label.setProperty("role", "hint")
+        hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint_label)
 
     def _select_mode(self, mode: str) -> None:
-        """处理模式选择。
-
-        参数：
-            mode: 选择的模式标识符
-        """
+        """处理模式选择。"""
         if mode not in (MODE_LATEST, MODE_CONTINUE):
             logger.warning("无效的模式选择已忽略: %s", mode)
             return
@@ -784,20 +745,12 @@ class ModeSelectDialog(QDialog):
         self.accept()
 
     def showEvent(self, event: QShowEvent) -> None:
-        """处理对话框显示事件。
-
-        参数：
-            event: 显示事件
-        """
+        """处理对话框显示事件。"""
         super().showEvent(event)
         self._center_on_parent_or_screen()
 
     def _center_on_parent_or_screen(self) -> None:
-        """将对话框居中于父窗口或屏幕。
-
-        优先居中于可见父窗口，否则居中于当前屏幕。
-        位置会被约束在可用屏幕区域内。
-        """
+        """将对话框居中于父窗口或屏幕。"""
         parent = self.parentWidget()
 
         if parent is not None and parent.isVisible():
@@ -813,7 +766,6 @@ class ModeSelectDialog(QDialog):
                 x = parent_geo.x() + (parent_geo.width() - self.width()) // 2
                 y = parent_geo.y() + (parent_geo.height() - self.height()) // 2
 
-                # 约束在可用区域内
                 x = max(available.x(), min(x, available.right() - self.width()))
                 y = max(available.y(), min(y, available.bottom() - self.height()))
 
@@ -834,9 +786,6 @@ class ModeSelectDialog(QDialog):
         - 1: 选择最新模式
         - 2: 选择续看模式（如可用）
         - Escape: 关闭对话框
-
-        参数：
-            event: 键盘事件
         """
         key = event.key()
 
@@ -850,26 +799,11 @@ class ModeSelectDialog(QDialog):
             super().keyPressEvent(event)
 
     def get_result(self) -> Optional[str]:
-        """获取用户选择的模式。
-
-        应在 exec() 返回后调用。
-
-        返回：
-            MODE_LATEST: 用户选择最新模式
-            MODE_CONTINUE: 用户选择续看模式
-            None: 对话框未选择关闭
-        """
+        """获取用户选择的模式。应在 exec() 返回后调用。"""
         return self.result
 
     def _tr(self, text: str) -> str:
-        """翻译文本。
-
-        参数：
-            text: 源文本
-
-        返回：
-            翻译后的文本（如有）或原文
-        """
+        """翻译文本。"""
         return QCoreApplication.translate("ModeSelectDialog", text)
 
 
