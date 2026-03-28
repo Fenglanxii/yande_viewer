@@ -48,7 +48,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QKeySequence, QPixmap, QShortcut
+from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -222,6 +222,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Yande.re Ultimate Viewer")
         self.setGeometry(100, 100, 1300, 900)
         self.setMinimumSize(800, 600)
+
+        # 设置窗口图标
+        _icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "favicon.ico")
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
         
         # 应用背景色以防止启动时闪烁
         bg_color = CONFIG.colors.bg_base
