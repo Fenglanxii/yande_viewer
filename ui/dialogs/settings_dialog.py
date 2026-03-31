@@ -1,26 +1,14 @@
 """设置对话框模块。
 
-本模块提供用户设置界面的完整实现，包括筛选、性能和界面设置。
-支持实时预览功能，用户修改设置时可立即看到效果。
-
-Example:
-    基本使用示例::
-
-        dialog = SettingsDialog(parent, current_settings)
-        dialog.preview_requested.connect(preview_handler)
-        dialog.settings_saved.connect(save_handler)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_settings = dialog.get_settings()
-
-Note:
-    本模块依赖 PyQt6 和 config.design_tokens 模块。
+提供用户设置界面的完整实现，支持实时预览。
+采用棱角分明的矩形设计风格。
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Any, Final, Optional, TYPE_CHECKING
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -29,7 +17,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QFrame,
-    QRadioButton,
     QCheckBox,
     QLineEdit,
     QSlider,
@@ -37,9 +24,13 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QWidget,
     QSpinBox,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QIntValidator
+
+from ui.widgets.switch_widget import SwitchWidget
+from ui.styles.dialog_styles import DialogStyleFactory
 
 if TYPE_CHECKING:
     from config.user_settings import UserSettings
@@ -48,52 +39,29 @@ logger = logging.getLogger("YandeViewer.UI.SettingsDialog")
 
 
 # ============================================================================
-# 设计令牌导入
+# 设计令牌导入（模块级只读常量）
 # ============================================================================
 
-def _get_tokens() -> Optional[Any]:
-    """安全获取设计令牌。
 
-    Returns:
-        设计令牌对象，如果导入失败则返回 None。
-    """
+def _get_tokens() -> Optional[Any]:
+    """安全获取设计令牌。"""
     try:
         from config.design_tokens import TOKENS
+
         return TOKENS
     except ImportError:
         logger.warning("设计令牌模块不可用，使用默认样式")
         return None
 
 
-def _get_settings_classes() -> Tuple[Optional[type], ...]:
-    """安全获取设置类。
-
-    Returns:
-        包含 (UserSettings, FilterSettings, PerformanceSettings, UISettings) 的元组，
-        导入失败的类将为 None。
-    """
-    try:
-        from config.user_settings import (
-            UserSettings,
-            FilterSettings,
-            PerformanceSettings,
-            UISettings,
-        )
-        return UserSettings, FilterSettings, PerformanceSettings, UISettings
-    except ImportError:
-        logger.error("无法导入用户设置类")
-        return None, None, None, None
-
-
-TOKENS = _get_tokens()
-UserSettings, FilterSettings, PerformanceSettings, UISettings = _get_settings_classes()
+TOKENS: Final[Optional[Any]] = _get_tokens()
 
 
 # ============================================================================
-# 常量定义
+# 常量
 # ============================================================================
 
-SCORE_OPTIONS: List[Tuple[int, str]] = [
+SCORE_OPTIONS: Final[list[tuple[int, str]]] = [
     (0, "不限"),
     (5, "≥5"),
     (10, "≥10"),
@@ -102,1180 +70,1067 @@ SCORE_OPTIONS: List[Tuple[int, str]] = [
     (30, "≥30"),
     (50, "≥50"),
 ]
-"""预设分数选项列表，每项包含 (分数值, 显示标签)。"""
 
-RATING_CONFIGS: List[Tuple[str, str, str, str]] = [
+RATING_CONFIGS: Final[list[tuple[str, str, str, str]]] = [
     ("s", "Safe", "rating_safe_bg", "rating_safe_text"),
     ("q", "Questionable", "rating_questionable_bg", "rating_questionable_text"),
     ("e", "Explicit", "rating_explicit_bg", "rating_explicit_text"),
 ]
-"""评级配置列表，每项包含 (键名, 标签, 背景色属性, 文字色属性)。"""
 
 
 # ============================================================================
-# 样式工厂
+# 工具函数
 # ============================================================================
+
+
+def _safe_attr(obj: Any, attr: str, default: Any = None) -> Any:
+    """安全属性访问，obj 为 None 时直接返回默认值。"""
+    if obj is None:
+        return default
+    return getattr(obj, attr, default)
+
+
+def _clamp(value: int, min_val: int, max_val: int) -> int:
+    """将 value 限制在 [min_val, max_val] 内。"""
+    return max(min_val, min(max_val, value))
+
+
+# ============================================================================
+# 数据结构定义
+# ============================================================================
+
 
 @dataclass
-class DialogStyleFactory:
-    """对话框样式工厂。
+class _DialogControls:
+    """所有需要后续读取的控件引用，类型明确。"""
 
-    集中管理所有样式生成，便于维护和主题切换。
+    score_group: Optional[QButtonGroup] = None
+    score_buttons: dict[int, QPushButton] = field(default_factory=dict)
+    custom_score_cb: Optional[QCheckBox] = None
+    custom_score_entry: Optional[QLineEdit] = None
+    rating_buttons: dict[str, QPushButton] = field(default_factory=dict)
+    high_first_switch: Optional[SwitchWidget] = None
+    preload_slider: Optional[QSlider] = None
+    cache_slider: Optional[QSlider] = None
+    workers_slider: Optional[QSlider] = None
+    timeout_slider: Optional[QSlider] = None
+    show_badge_switch: Optional[SwitchWidget] = None
+    show_highlight_switch: Optional[SwitchWidget] = None
+    threshold_spinbox: Optional[QSpinBox] = None
 
-    Attributes:
-        colors: 颜色配置对象。
-        typography: 排版配置对象。
-        layout: 布局配置对象。
-    """
 
-    colors: Any
-    typography: Any
-    layout: Any
+@dataclass(frozen=True)
+class SliderSpec:
+    """滑块配置规格。"""
 
-    def label(self) -> str:
-        """生成标签样式。
+    label: str
+    min_val: int
+    max_val: int
+    default: int
+    key: str  # 对应 _DialogControls 的属性名
+    hint: str
 
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            color: {self.colors.text_primary};
-            font-family: {self.typography.font_primary};
-            font-size: {self.typography.size_sm}px;
-        """
 
-    def section_title(self) -> str:
-        """生成分组标题样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            color: {self.colors.accent};
-            font-family: {self.typography.font_primary};
-            font-size: {self.typography.size_md}px;
-            font-weight: bold;
-        """
-
-    def panel(self) -> str:
-        """生成面板样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QFrame {{
-                background-color: {self.colors.bg_surface};
-                border-radius: {self.layout.radius_md}px;
-                padding: 15px;
-            }}
-        """
-
-    def checkbox(self) -> str:
-        """生成复选框样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QCheckBox {{
-                color: {self.colors.text_primary};
-                font-size: {self.typography.size_sm}px;
-            }}
-            QCheckBox::indicator {{
-                width: 14px;
-                height: 14px;
-                border: 1px solid {self.colors.border_default};
-                border-radius: 3px;
-                background-color: {self.colors.bg_base};
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {self.colors.accent};
-                border-color: {self.colors.accent};
-            }}
-        """
-
-    def radio_button(self) -> str:
-        """生成单选按钮样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QRadioButton {{
-                color: {self.colors.text_primary};
-                font-size: {self.typography.size_xs}px;
-            }}
-            QRadioButton::indicator {{
-                width: 12px;
-                height: 12px;
-                border: 1px solid {self.colors.border_default};
-                border-radius: 6px;
-                background-color: {self.colors.bg_base};
-            }}
-            QRadioButton::indicator:checked {{
-                background-color: {self.colors.accent};
-                border-color: {self.colors.accent};
-            }}
-        """
-
-    def button(self, variant: str = "default") -> str:
-        """生成按钮样式。
-
-        Args:
-            variant: 按钮变体类型，支持 "primary"、"default"、"danger"。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        variants = {
-            "primary": (self.colors.accent, self.colors.accent_hover),
-            "default": (self.colors.bg_surface, self.colors.bg_hover),
-            "danger": (self.colors.error, "#D32F2F"),
-        }
-        bg, hover = variants.get(variant, variants["default"])
-
-        return f"""
-            QPushButton {{
-                background-color: {bg};
-                color: {self.colors.text_primary};
-                border: none;
-                border-radius: {self.layout.radius_md}px;
-                padding: 8px 16px;
-                font-weight: 500;
-                min-height: {self.layout.button_height_sm}px;
-            }}
-            QPushButton:hover {{
-                background-color: {hover};
-            }}
-            QPushButton:disabled {{
-                background-color: #555555;
-                color: #888888;
-            }}
-        """
-
-    def slider(self) -> str:
-        """生成滑动条样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QSlider::groove:horizontal {{
-                background: {self.colors.slider_track};
-                height: 6px;
-                border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                background: {self.colors.accent};
-                width: 16px;
-                height: 16px;
-                margin: -5px 0;
-                border-radius: 8px;
-            }}
-            QSlider::handle:horizontal:hover {{
-                background: {self.colors.accent_hover};
-            }}
-            QSlider::sub-page:horizontal {{
-                background: {self.colors.slider_track_active};
-                border-radius: 3px;
-            }}
-        """
-
-    def line_edit(self) -> str:
-        """生成输入框样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QLineEdit {{
-                background-color: #333333;
-                color: {self.colors.text_primary};
-                border: none;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: {self.typography.size_sm}px;
-            }}
-            QLineEdit:focus {{
-                background-color: #3D3D3D;
-            }}
-            QLineEdit:disabled {{
-                background-color: #252525;
-                color: {self.colors.text_secondary};
-            }}
-        """
-
-    def rating_chip(self, bg_color: str, text_color: str) -> str:
-        """生成评级切换按钮样式。
-
-        Args:
-            bg_color: 选中时的背景颜色。
-            text_color: 选中时的文字颜色。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {self.colors.text_secondary};
-                border: 1px solid {self.colors.border_default};
-                border-radius: 12px;
-                padding: 4px 12px;
-                font-size: {self.typography.size_sm}px;
-            }}
-            QPushButton:checked {{
-                background-color: {bg_color};
-                color: {text_color};
-                border-color: {text_color};
-            }}
-            QPushButton:hover {{
-                border-color: {text_color};
-            }}
-        """
-
-    def scrollbar(self) -> str:
-        """生成滚动条样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return """
-            QScrollBar:vertical {
-                background: transparent;
-                width: 10px;
-                margin: 4px 2px;
-            }
-            QScrollBar::handle:vertical {
-                background: #555555;
-                border-radius: 4px;
-                min-height: 30px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #777777;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
-        """
-
-    def spinbox(self) -> str:
-        """生成数字调节框样式。
-
-        Returns:
-            CSS 样式字符串。
-        """
-        return f"""
-            QSpinBox {{
-                background-color: #333333;
-                color: {self.colors.text_primary};
-                border: none;
-                border-radius: 4px;
-                padding: 2px 6px;
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                width: 16px;
-                background-color: {self.colors.bg_surface};
-                border-radius: 2px;
-            }}
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background-color: {self.colors.bg_hover};
-            }}
-        """
+# 性能面板滑块配置
+PERF_SLIDERS: Final[list[SliderSpec]] = [
+    SliderSpec(
+        "预加载数量",
+        5,
+        30,
+        15,
+        "preload_slider",
+        "推荐 15，调高可提升翻页流畅度，但会增加内存占用",
+    ),
+    SliderSpec(
+        "缓存图片", 20, 100, 50, "cache_slider", "推荐 50，适合大多数设备使用"
+    ),
+    SliderSpec(
+        "下载并发", 1, 5, 3, "workers_slider", "推荐 3，网络较好时可适当调高"
+    ),
+    SliderSpec(
+        "超时时间",
+        5,
+        30,
+        15,
+        "timeout_slider",
+        "推荐 15 秒，网络较慢时建议提高到 20 秒以上",
+    ),
+]
 
 
 # ============================================================================
 # 设置对话框
 # ============================================================================
 
+
 class SettingsDialog(QDialog):
-    """设置对话框。
-
-    提供完整的用户设置界面，支持实时预览功能。
-
-    Attributes:
-        original_settings: 打开对话框时的原始设置（用于取消时恢复）。
-        current_settings: 当前编辑中的设置。
+    """设置对话框，支持实时预览。
 
     Signals:
-        preview_requested: 请求预览设置变更时发射，携带 UserSettings 对象。
-        settings_saved: 设置保存成功时发射，携带 UserSettings 对象。
-
-    Example:
-        创建并使用设置对话框::
-
-            dialog = SettingsDialog(parent, current_settings)
-            dialog.preview_requested.connect(on_preview)
-            dialog.settings_saved.connect(on_save)
-            dialog.exec()
+        preview_requested: 请求预览设置变更，携带 UserSettings。
+        settings_saved: 设置保存完成，携带 UserSettings。
     """
 
-    # 信号定义
     preview_requested = pyqtSignal(object)
     settings_saved = pyqtSignal(object)
 
-    # 对话框尺寸常量
     DIALOG_WIDTH: int = 500
-    DIALOG_HEIGHT: int = 600
-
-    # 预览防抖延迟（毫秒）
+    DIALOG_HEIGHT: int = 660
     PREVIEW_DEBOUNCE_MS: int = 200
+    PAGE_H_MARGIN: int = 20
+    PAGE_V_MARGIN: int = 16
+    SECTION_SPACING: int = 18
+    ITEM_SPACING: int = 8
+    SLIDER_ITEM_SPACING: int = 10
 
     def __init__(
         self,
         parent: Optional[QWidget] = None,
         settings: Optional[Any] = None,
     ) -> None:
-        """初始化设置对话框。
-
-        Args:
-            parent: 父窗口，可选。
-            settings: UserSettings 实例，如果为 None 则使用默认设置。
-
-        Raises:
-            RuntimeError: 当 UserSettings 类不可用且未提供 settings 参数时。
-        """
         super().__init__(parent)
 
-        # 设置验证和初始化
+        # 懒加载设置类
+        from config.user_settings import (
+            UserSettings as _UserSettings,
+            FilterSettings as _FilterSettings,
+            PerformanceSettings as _PerformanceSettings,
+            UISettings as _UISettings,
+        )
+
+        self._UserSettings = _UserSettings
+        self._FilterSettings = _FilterSettings
+        self._PerformanceSettings = _PerformanceSettings
+        self._UISettings = _UISettings
+
         if settings is None:
-            if UserSettings is not None:
-                settings = UserSettings()
-            else:
-                logger.error("UserSettings 类不可用，无法创建对话框")
-                self.reject()
-                return
+            settings = _UserSettings()
+        if settings is None:
+            logger.error("UserSettings 类不可用")
+            QTimer.singleShot(0, self.reject)
+            return
 
         self.original_settings = settings
         self.current_settings = (
             settings.copy() if hasattr(settings, "copy") else settings
         )
 
-        # 初始化样式工厂
+        # 预提取常用属性，避免深层 _safe_attr 链
+        self._orig_filter = _safe_attr(settings, "filter")
+        self._orig_perf = _safe_attr(settings, "performance")
+        self._orig_ui = _safe_attr(settings, "ui")
+
+        # 样式工厂
         self.styles: Optional[DialogStyleFactory] = None
         if TOKENS is not None:
             self.styles = DialogStyleFactory(
-                TOKENS.colors,
-                TOKENS.typography,
-                TOKENS.layout,
+                TOKENS.colors, TOKENS.typography, TOKENS.layout
             )
-        else:
-            logger.warning("TOKENS 不可用，将使用备用样式")
 
-        # 控件引用字典
-        self._controls: Dict[str, Any] = {}
+        # 控件引用（类型安全）
+        self._controls: _DialogControls = _DialogControls()
         self._preview_timer: Optional[QTimer] = None
 
-        # 窗口基本设置
-        self.setWindowTitle("⚙️ 设置")
+        self.setWindowTitle("设置")
         self.setFixedSize(self.DIALOG_WIDTH, self.DIALOG_HEIGHT)
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
         )
-
         if TOKENS is not None:
             self.setStyleSheet(f"background-color: {TOKENS.colors.bg_base};")
 
-        # 构建 UI
         self._setup_ui()
         self._connect_preview_signals()
-
-        # 居中显示
         self._center_on_parent()
 
         logger.debug("SettingsDialog 初始化完成")
 
+    # ── 生命周期 ──────────────────────────────────────────────
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._cleanup()
+        super().closeEvent(event)
+
+    def _cleanup(self) -> None:
+        """释放定时器等资源。"""
+        if self._preview_timer is not None:
+            self._preview_timer.stop()
+            self._preview_timer = None
+
+        # 停止所有 SwitchWidget 动画
+        for attr_name in (
+            "high_first_switch",
+            "show_badge_switch",
+            "show_highlight_switch",
+        ):
+            sw = getattr(self._controls, attr_name, None)
+            if sw is not None and hasattr(sw, "stop_animation"):
+                sw.stop_animation()
+
     def _center_on_parent(self) -> None:
-        """将对话框居中显示在父窗口上。"""
         parent = self.parent()
         if parent is not None:
-            geo = parent.geometry()
-            x = geo.x() + (geo.width() - self.width()) // 2
-            y = geo.y() + (geo.height() - self.height()) // 2
-            self.move(x, y)
+            try:
+                geo = parent.geometry()
+                x = geo.x() + (geo.width() - self.width()) // 2
+                y = geo.y() + (geo.height() - self.height()) // 2
+                self.move(x, y)
+            except Exception:
+                logger.debug("居中定位失败", exc_info=True)
+
+    # ── UI 构建 ───────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
-        """构建用户界面。"""
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(12)
-        main_layout.setContentsMargins(16, 16, 16, 12)
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(
+            self.PAGE_H_MARGIN,
+            self.PAGE_V_MARGIN,
+            self.PAGE_H_MARGIN,
+            self.PAGE_V_MARGIN,
+        )
 
-        # 标题
-        self._create_title(main_layout)
+        self._build_title(root)
 
-        # 滚动区域
-        scroll = self._create_scroll_area()
+        scroll = self._build_scroll_area()
         container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(16)
-        container_layout.setContentsMargins(0, 0, 8, 0)
+        body = QVBoxLayout(container)
+        body.setSpacing(self.SECTION_SPACING)
+        body.setContentsMargins(0, 0, 4, 0)
 
-        # 筛选设置区域
-        self._create_section_title(container_layout, "🎯 筛选设置")
-        self._create_filter_panel(container_layout)
+        self._build_section_header(body, "筛选设置", "控制显示内容的范围与排序")
+        self._build_filter_panel(body)
 
-        # 性能设置区域
-        self._create_section_title(container_layout, "⚡ 性能设置")
-        self._create_performance_panel(container_layout)
+        self._build_section_header(body, "性能设置", "影响加载速度与内存占用")
+        self._build_performance_panel(body)
 
-        # 界面设置区域
-        self._create_section_title(container_layout, "🎨 界面设置")
-        self._create_ui_panel(container_layout)
+        self._build_section_header(body, "界面设置", "调整显示与提示方式")
+        self._build_ui_panel(body)
 
-        container_layout.addStretch()
+        body.addStretch()
         scroll.setWidget(container)
-        main_layout.addWidget(scroll)
+        root.addWidget(scroll)
 
-        # 按钮栏
-        self._create_button_bar(main_layout)
+        self._build_button_bar(root)
 
-    def _create_title(self, layout: QVBoxLayout) -> None:
-        """创建对话框标题。
+    # ── 标题 ──────────────────────────────────────────────────
 
-        Args:
-            layout: 父布局。
-        """
-        title = QLabel("⚙️ 设置")
-
-        if TOKENS is not None:
-            title.setStyleSheet(f"""
-                QLabel {{
-                    color: {TOKENS.colors.text_primary};
-                    font-family: {TOKENS.typography.font_icon};
-                    font-size: {TOKENS.typography.size_lg}px;
-                    font-weight: bold;
-                }}
-            """)
+    def _build_title(self, layout: QVBoxLayout) -> None:
+        title = QLabel("设置")
+        if self.styles:
+            title.setStyleSheet(self.styles.page_title())
         else:
-            title.setStyleSheet("font-size: 15px; font-weight: bold;")
-
+            title.setStyleSheet(
+                "font-size: 15px; font-weight: 600; color: #E0E0E0;"
+            )
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setContentsMargins(0, 0, 0, 4)
         layout.addWidget(title)
 
-    def _create_scroll_area(self) -> QScrollArea:
-        """创建滚动区域。
+    # ── 滚动区域 ──────────────────────────────────────────────
 
-        Returns:
-            配置好的 QScrollArea 实例。
-        """
+    def _build_scroll_area(self) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
 
-        style = "QScrollArea { border: none; background-color: transparent; }"
-        if self.styles is not None:
+        # 合并为一次 setStyleSheet 调用
+        style = (
+            "QScrollArea { border: none; background-color: transparent; } "
+            "QWidget { background-color: transparent; }"
+        )
+        if self.styles:
             style += self.styles.scrollbar()
-
         scroll.setStyleSheet(style)
+
         return scroll
 
-    def _create_section_title(self, layout: QVBoxLayout, title: str) -> None:
-        """创建分组标题。
+    # ── 分组标题 ──────────────────────────────────────────────
 
-        Args:
-            layout: 父布局。
-            title: 标题文本。
-        """
-        label = QLabel(title)
+    def _build_section_header(
+        self, layout: QVBoxLayout, title: str, desc: str
+    ) -> None:
+        header = QFrame()
+        header.setStyleSheet("background: transparent; border: none;")
+        h = QHBoxLayout(header)
+        h.setContentsMargins(0, 6, 0, 2)
+        h.setSpacing(8)
 
-        if self.styles is not None:
-            label.setStyleSheet(self.styles.section_title())
+        # 竖色条
+        bar = QFrame()
+        bar.setFixedSize(3, 28)
+        accent = TOKENS.colors.accent if TOKENS else "#E84393"
+        bar.setStyleSheet(
+            f"background-color: {accent}; border: none; border-radius: 0px;"
+        )
+        h.addWidget(bar)
+
+        # 文字列
+        col = QWidget()
+        col.setStyleSheet("background: transparent;")
+        col_l = QVBoxLayout(col)
+        col_l.setContentsMargins(0, 0, 0, 0)
+        col_l.setSpacing(2)
+
+        t = QLabel(title)
+        if self.styles:
+            t.setStyleSheet(self.styles.section_title())
         else:
-            label.setStyleSheet("font-weight: bold;")
+            t.setStyleSheet(
+                "font-weight: 700; font-size: 12px; color: #E0E0E0;"
+            )
+        col_l.addWidget(t)
 
-        layout.addWidget(label)
+        d = QLabel(desc)
+        if self.styles:
+            d.setStyleSheet(self.styles.section_desc())
+        else:
+            d.setStyleSheet("color: #888; font-size: 10px;")
+        col_l.addWidget(d)
 
-    def _create_filter_panel(self, layout: QVBoxLayout) -> None:
-        """创建筛选设置面板。
+        h.addWidget(col)
+        h.addStretch()
+        layout.addWidget(header)
 
-        Args:
-            layout: 父布局。
-        """
+    # ── 辅助：面板内分隔线 ────────────────────────────────────
+
+    @staticmethod
+    def _make_separator() -> QFrame:
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.04);")
+        return sep
+
+    # ================================================================
+    # 筛选设置面板
+    # ================================================================
+
+    def _build_filter_panel(self, layout: QVBoxLayout) -> None:
         panel = QFrame()
-        if self.styles is not None:
+        panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        if self.styles:
             panel.setStyleSheet(self.styles.panel())
 
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setSpacing(10)
+        p = QVBoxLayout(panel)
+        p.setSpacing(14)
 
-        # 分数选项
-        self._create_score_section(panel_layout)
+        self._build_score_chips(p)
+        self._build_custom_score(p)
 
-        # 自定义分数
-        self._create_custom_score_section(panel_layout)
+        p.addWidget(self._make_separator())
+        p.addSpacing(2)
 
-        # 评级过滤
-        self._create_rating_section(panel_layout)
+        self._build_rating_chips(p)
+        p.addWidget(self._make_separator())
 
-        # 高分优先
-        self._create_high_first_option(panel_layout)
+        self._build_high_first_switch(p)
 
         layout.addWidget(panel)
 
-    def _create_score_section(self, layout: QVBoxLayout) -> None:
-        """创建分数选择区域。
+    # ── 分数选择 ──────────────────────────────────────────────
 
-        Args:
-            layout: 父布局。
-        """
-        score_label = QLabel("最低分数:")
-        if self.styles is not None:
-            score_label.setStyleSheet(self.styles.label())
-        layout.addWidget(score_label)
-
-        # 分数按钮组
-        score_frame = QFrame()
-        score_frame.setStyleSheet("background-color: transparent;")
-        score_layout = QHBoxLayout(score_frame)
-        score_layout.setContentsMargins(0, 0, 0, 0)
-        score_layout.setSpacing(10)
-
-        self._controls["score_group"] = QButtonGroup(self)
-        self._controls["score_buttons"] = {}
-
-        current_score = getattr(self.original_settings.filter, "min_score", 0)
-
-        for score, label in SCORE_OPTIONS:
-            rb = QRadioButton(label)
-            if self.styles is not None:
-                rb.setStyleSheet(self.styles.radio_button())
-            rb.setMinimumWidth(45)
-
-            if score == current_score:
-                rb.setChecked(True)
-
-            self._controls["score_group"].addButton(rb, score)
-            self._controls["score_buttons"][score] = rb
-            score_layout.addWidget(rb)
-
-        score_layout.addStretch()
-        layout.addWidget(score_frame)
-
-    def _create_custom_score_section(self, layout: QVBoxLayout) -> None:
-        """创建自定义分数区域。
-
-        Args:
-            layout: 父布局。
-        """
-        frame = QFrame()
-        frame.setStyleSheet("background-color: transparent;")
-        frame_layout = QHBoxLayout(frame)
-        frame_layout.setContentsMargins(0, 0, 0, 0)
-        frame_layout.setSpacing(8)
-
-        current_score = getattr(self.original_settings.filter, "min_score", 0)
-        is_custom = current_score not in [s for s, _ in SCORE_OPTIONS]
-
-        # 复选框
-        cb = QCheckBox("自定义:")
-        cb.setChecked(is_custom)
-        if self.styles is not None:
-            cb.setStyleSheet(self.styles.checkbox())
-        self._controls["custom_score_cb"] = cb
-        frame_layout.addWidget(cb)
-
-        # 输入框
-        entry = QLineEdit()
-        entry.setFixedWidth(60)
-        entry.setFixedHeight(28)
-        entry.setPlaceholderText("0-100")
-        entry.setEnabled(is_custom)
-
-        if self.styles is not None:
-            entry.setStyleSheet(self.styles.line_edit())
-
-        if is_custom:
-            entry.setText(str(current_score))
-
-        self._controls["custom_score_entry"] = entry
-        frame_layout.addWidget(entry)
-        frame_layout.addStretch()
-
-        layout.addWidget(frame)
-
-        # 连接信号
-        cb.stateChanged.connect(self._on_custom_score_toggle)
-
-    def _create_rating_section(self, layout: QVBoxLayout) -> None:
-        """创建评级过滤区域。
-
-        Args:
-            layout: 父布局。
-        """
-        label = QLabel("评级过滤:")
-        if self.styles is not None:
-            label.setStyleSheet(self.styles.label())
+    def _build_score_chips(self, layout: QVBoxLayout) -> None:
+        label = QLabel("最低分数门槛")
+        if self.styles:
+            label.setStyleSheet(self.styles.param_title())
         layout.addWidget(label)
 
-        frame = QFrame()
-        frame.setStyleSheet("background-color: transparent;")
-        frame_layout = QHBoxLayout(frame)
-        frame_layout.setContentsMargins(0, 0, 0, 0)
-        frame_layout.setSpacing(10)
+        self._controls.score_group = QButtonGroup(self)
+        current = _safe_attr(self._orig_filter, "min_score", 0)
 
-        self._controls["rating_buttons"] = {}
-        current_ratings = getattr(
-            self.original_settings.filter, "ratings", {"s", "q", "e"}
+        rows = (SCORE_OPTIONS[:4], SCORE_OPTIONS[4:])
+
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent;")
+        wrapper_l = QVBoxLayout(wrapper)
+        wrapper_l.setContentsMargins(0, 0, 0, 0)
+        wrapper_l.setSpacing(4)
+
+        for row in rows:
+            rw = QWidget()
+            rw.setStyleSheet("background: transparent;")
+            rl = QHBoxLayout(rw)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+
+            for score, text in row:
+                btn = QPushButton(text)
+                btn.setCheckable(True)
+                btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                if self.styles:
+                    btn.setStyleSheet(self.styles.score_chip())
+                if score == current:
+                    btn.setChecked(True)
+
+                self._controls.score_group.addButton(btn, score)
+                self._controls.score_buttons[score] = btn
+                rl.addWidget(btn)
+
+            rl.addStretch()
+            wrapper_l.addWidget(rw)
+
+        layout.addWidget(wrapper)
+
+    # ── 自定义分数 ────────────────────────────────────────────
+
+    def _build_custom_score(self, layout: QVBoxLayout) -> None:
+        current = _safe_attr(self._orig_filter, "min_score", 0)
+        preset_scores = [s for s, _ in SCORE_OPTIONS]
+        is_custom = current not in preset_scores
+
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
+
+        cb = QCheckBox("自定义分数")
+        cb.setChecked(is_custom)
+        if self.styles:
+            cb.setStyleSheet(self.styles.checkbox_with_check())
+        self._controls.custom_score_cb = cb
+        rl.addWidget(cb)
+
+        entry = QLineEdit()
+        entry.setFixedWidth(50)
+        entry.setFixedHeight(24)
+        entry.setPlaceholderText("0-100")
+        entry.setEnabled(is_custom)
+        entry.setValidator(QIntValidator(0, 100, self))
+        if self.styles:
+            entry.setStyleSheet(self.styles.line_edit())
+        if is_custom:
+            entry.setText(str(current))
+        self._controls.custom_score_entry = entry
+        rl.addWidget(entry)
+
+        rl.addStretch()
+        layout.addWidget(row)
+
+        cb.stateChanged.connect(self._on_custom_score_toggle)
+
+    # ── 评级过滤 ──────────────────────────────────────────────
+
+    def _build_rating_chips(self, layout: QVBoxLayout) -> None:
+        label = QLabel("内容评级")
+        if self.styles:
+            label.setStyleSheet(self.styles.param_title())
+        layout.addWidget(label)
+
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
+
+        current_ratings = _safe_attr(
+            self._orig_filter, "ratings", {"s", "q", "e"}
         )
 
-        for key, label_text, bg_attr, text_attr in RATING_CONFIGS:
-            btn = QPushButton(label_text)
+        for key, text, bg_attr, txt_attr in RATING_CONFIGS:
+            btn = QPushButton(text)
             btn.setCheckable(True)
             btn.setChecked(key in current_ratings)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn.setFixedHeight(28)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+            btn.setMinimumHeight(28)
 
-            if self.styles is not None and TOKENS is not None:
-                bg_color = getattr(TOKENS.colors, bg_attr, "#333333")
-                text_color = getattr(TOKENS.colors, text_attr, "#FFFFFF")
-                btn.setStyleSheet(self.styles.rating_chip(bg_color, text_color))
+            if self.styles and TOKENS:
+                bg = getattr(TOKENS.colors, bg_attr, "#333")
+                tc = getattr(TOKENS.colors, txt_attr, "#FFF")
+                btn.setStyleSheet(self.styles.rating_chip(bg, tc))
 
-            self._controls["rating_buttons"][key] = btn
-            frame_layout.addWidget(btn)
+            self._controls.rating_buttons[key] = btn
+            rl.addWidget(btn)
 
-        frame_layout.addStretch()
-        layout.addWidget(frame)
+        rl.addStretch()
+        layout.addWidget(row)
+        layout.addSpacing(4)
 
-    def _create_high_first_option(self, layout: QVBoxLayout) -> None:
-        """创建高分优先选项。
+    # ── 高分优先 ──────────────────────────────────────────────
 
-        Args:
-            layout: 父布局。
-        """
-        cb = QCheckBox("高分优先显示 (分数≥10的内容优先)")
-        cb.setChecked(
-            getattr(self.original_settings.filter, "high_score_first", True)
+    def _build_high_first_switch(self, layout: QVBoxLayout) -> None:
+        self._build_switch_row(
+            layout,
+            title="优先显示高分内容",
+            hint="优先排列高分图片，不影响筛选范围",
+            checked=_safe_attr(self._orig_filter, "high_score_first", True),
+            key="high_first_switch",
         )
 
-        if self.styles is not None:
-            cb.setStyleSheet(self.styles.checkbox())
+    # ================================================================
+    # 性能设置面板
+    # ================================================================
 
-        self._controls["high_first_cb"] = cb
-        layout.addWidget(cb)
-
-    def _create_performance_panel(self, layout: QVBoxLayout) -> None:
-        """创建性能设置面板。
-
-        Args:
-            layout: 父布局。
-        """
+    def _build_performance_panel(self, layout: QVBoxLayout) -> None:
         panel = QFrame()
-        if self.styles is not None:
+        if self.styles:
             panel.setStyleSheet(self.styles.panel())
 
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setSpacing(12)
+        p = QVBoxLayout(panel)
+        p.setSpacing(self.SLIDER_ITEM_SPACING)
 
-        perf = self.original_settings.performance
-
-        # 预加载数量
-        row, slider = self._create_slider_row(
-            "预加载数量:",
-            5,
-            30,
-            getattr(perf, "preload_count", 15),
-        )
-        self._controls["preload_slider"] = slider
-        panel_layout.addWidget(row)
-
-        # 图片缓存
-        row, slider = self._create_slider_row(
-            "图片缓存:",
-            20,
-            100,
-            getattr(perf, "max_image_cache", 50),
-        )
-        self._controls["cache_slider"] = slider
-        panel_layout.addWidget(row)
-
-        # 下载线程
-        row, slider = self._create_slider_row(
-            "下载线程:",
-            1,
-            5,
-            getattr(perf, "download_workers", 3),
-        )
-        self._controls["workers_slider"] = slider
-        panel_layout.addWidget(row)
-
-        # 加载超时
-        row, slider = self._create_slider_row(
-            "加载超时(秒):",
-            5,
-            30,
-            getattr(perf, "load_timeout", 15),
-        )
-        self._controls["timeout_slider"] = slider
-        panel_layout.addWidget(row)
+        for i, spec in enumerate(PERF_SLIDERS):
+            self._build_slider_item(p, spec)
+            if i < len(PERF_SLIDERS) - 1:
+                p.addWidget(self._make_separator())
 
         layout.addWidget(panel)
 
-    def _create_slider_row(
-        self,
-        label_text: str,
-        min_val: int,
-        max_val: int,
-        current: int,
-    ) -> Tuple[QFrame, QSlider]:
-        """创建滑动条行组件。
-
-        Args:
-            label_text: 标签文本。
-            min_val: 最小值。
-            max_val: 最大值。
-            current: 当前值。
-
-        Returns:
-            包含 (行容器, 滑动条控件) 的元组。
-        """
-        # 确保当前值在有效范围内
-        current = max(min_val, min(max_val, current))
-
-        row = QFrame()
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
-
-        # 标签
-        label = QLabel(label_text)
-        label.setFixedWidth(100)
-        if self.styles is not None:
-            label.setStyleSheet(self.styles.label())
-        row_layout.addWidget(label)
-
-        # 最小值标签
-        min_label = QLabel(str(min_val))
-        min_label.setFixedWidth(20)
-        min_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+    def _build_slider_item(self, layout: QVBoxLayout, spec: SliderSpec) -> None:
+        """构建滑块项。"""
+        # 从 original_settings.performance 获取实际值
+        perf_val_map = {
+            "preload_slider": _safe_attr(
+                self._orig_perf, "preload_count", spec.default
+            ),
+            "cache_slider": _safe_attr(
+                self._orig_perf, "max_image_cache", spec.default
+            ),
+            "workers_slider": _safe_attr(
+                self._orig_perf, "download_workers", spec.default
+            ),
+            "timeout_slider": _safe_attr(
+                self._orig_perf, "load_timeout", spec.default
+            ),
+        }
+        current = _clamp(
+            perf_val_map.get(spec.key, spec.default), spec.min_val, spec.max_val
         )
-        if TOKENS is not None:
-            min_label.setStyleSheet(
-                f"color: {TOKENS.colors.text_secondary}; font-size: 11px;"
-            )
-        row_layout.addWidget(min_label)
 
-        # 滑动条
+        box = QWidget()
+        box.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(3)
+
+        # 行1：名称 + 值徽章
+        hdr = QWidget()
+        hdr.setStyleSheet("background: transparent;")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
+
+        name = QLabel(spec.label)
+        if self.styles:
+            name.setStyleSheet(self.styles.param_title())
+        hl.addWidget(name)
+        hl.addStretch()
+
+        val_label = QLabel(str(current))
+        val_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if self.styles:
+            val_label.setStyleSheet(self.styles.value_badge())
+        hl.addWidget(val_label)
+        bl.addWidget(hdr)
+
+        # 行2：min + slider + max
+        sr = QWidget()
+        sr.setStyleSheet("background: transparent;")
+        sl = QHBoxLayout(sr)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(6)
+
+        lo = QLabel(str(spec.min_val))
+        lo.setFixedWidth(20)
+        lo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if TOKENS:
+            lo.setStyleSheet(
+                f"color: {TOKENS.colors.text_muted}; "
+                f"font-size: {TOKENS.typography.size_xs}px;"
+            )
+        sl.addWidget(lo)
+
         slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(min_val, max_val)
+        slider.setRange(spec.min_val, spec.max_val)
         slider.setValue(current)
-        if self.styles is not None:
+        if self.styles:
             slider.setStyleSheet(self.styles.slider())
-        row_layout.addWidget(slider, 1)
+        sl.addWidget(slider, 1)
 
-        # 最大值标签
-        max_label = QLabel(str(max_val))
-        max_label.setFixedWidth(20)
-        if TOKENS is not None:
-            max_label.setStyleSheet(
-                f"color: {TOKENS.colors.text_secondary}; font-size: 11px;"
+        hi = QLabel(str(spec.max_val))
+        hi.setFixedWidth(20)
+        hi.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if TOKENS:
+            hi.setStyleSheet(
+                f"color: {TOKENS.colors.text_muted}; "
+                f"font-size: {TOKENS.typography.size_xs}px;"
             )
-        row_layout.addWidget(max_label)
+        sl.addWidget(hi)
+        bl.addWidget(sr)
 
-        # 当前值显示
-        value_label = QLabel(str(current))
-        value_label.setFixedWidth(45)
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        if TOKENS is not None:
-            value_label.setStyleSheet(f"""
-                color: {TOKENS.colors.value_display};
-                font-weight: bold;
-                background-color: {TOKENS.colors.bg_surface};
-                border-radius: 4px;
-                padding: 2px 4px;
-            """)
+        slider.valueChanged.connect(lambda v, lb=val_label: lb.setText(str(v)))
 
-        # 值变化时更新显示
-        slider.valueChanged.connect(lambda v: value_label.setText(str(v)))
-        row_layout.addWidget(value_label)
+        # 行3：提示
+        h = QLabel(spec.hint)
+        if self.styles:
+            h.setStyleSheet(self.styles.hint_text())
+        bl.addWidget(h)
 
-        return row, slider
+        layout.addWidget(box)
 
-    def _create_ui_panel(self, layout: QVBoxLayout) -> None:
-        """创建界面设置面板。
+        # 设置控件引用
+        setattr(self._controls, spec.key, slider)
 
-        Args:
-            layout: 父布局。
-        """
+    # ================================================================
+    # 界面设置面板
+    # ================================================================
+
+    def _build_ui_panel(self, layout: QVBoxLayout) -> None:
         panel = QFrame()
-        if self.styles is not None:
+        if self.styles:
             panel.setStyleSheet(self.styles.panel())
 
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setSpacing(10)
+        p = QVBoxLayout(panel)
+        p.setSpacing(self.ITEM_SPACING)
 
-        ui = self.original_settings.ui
-
-        # 显示已保存标记
-        cb = QCheckBox("显示已保存标记")
-        cb.setChecked(getattr(ui, "show_saved_badge", True))
-        if self.styles is not None:
-            cb.setStyleSheet(self.styles.checkbox())
-        self._controls["show_badge_cb"] = cb
-        panel_layout.addWidget(cb)
-
-        # 高分高亮
-        self._create_highlight_section(panel_layout, ui)
+        self._build_switch_row(
+            p,
+            title="显示已保存标记",
+            hint="在已下载的图片上显示保存标识",
+            checked=_safe_attr(self._orig_ui, "show_saved_badge", True),
+            key="show_badge_switch",
+        )
+        p.addWidget(self._make_separator())
+        self._build_highlight_section(p)
 
         layout.addWidget(panel)
 
-    def _create_highlight_section(self, layout: QVBoxLayout, ui: Any) -> None:
-        """创建高分高亮设置区域。
+    # ── Switch 行（通用） ─────────────────────────────────────
 
-        Args:
-            layout: 父布局。
-            ui: UI 设置对象。
-        """
-        frame = QFrame()
-        frame.setStyleSheet("background-color: transparent;")
-        frame_layout = QHBoxLayout(frame)
-        frame_layout.setContentsMargins(0, 0, 0, 0)
-        frame_layout.setSpacing(8)
+    def _build_switch_row(
+        self,
+        layout: QVBoxLayout,
+        title: str,
+        hint: str,
+        checked: bool,
+        key: str,
+    ) -> None:
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
 
-        # 复选框
-        cb = QCheckBox("高分高亮显示")
-        cb.setChecked(getattr(ui, "show_score_highlight", True))
-        if self.styles is not None:
-            cb.setStyleSheet(self.styles.checkbox())
-        self._controls["show_highlight_cb"] = cb
-        frame_layout.addWidget(cb)
+        txt = QWidget()
+        txt.setStyleSheet("background: transparent;")
+        tl = QVBoxLayout(txt)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(1)
 
-        # 阈值标签
-        label1 = QLabel("(阈值:")
-        if TOKENS is not None:
-            label1.setStyleSheet(
-                f"color: {TOKENS.colors.text_secondary}; font-size: 12px;"
-            )
-        frame_layout.addWidget(label1)
+        t = QLabel(title)
+        if self.styles:
+            t.setStyleSheet(self.styles.param_title())
+        tl.addWidget(t)
 
-        # 阈值输入
+        h = QLabel(hint)
+        if self.styles:
+            h.setStyleSheet(self.styles.hint_text())
+        tl.addWidget(h)
+
+        rl.addWidget(txt)
+        rl.addStretch()
+
+        sw = SwitchWidget(checked=checked)
+        setattr(self._controls, key, sw)
+        rl.addWidget(sw)
+
+        layout.addWidget(row)
+
+    # ── 高分高亮（含子设置） ──────────────────────────────────
+
+    def _build_highlight_section(self, layout: QVBoxLayout) -> None:
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        cl = QVBoxLayout(container)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(4)
+
+        # 主开关
+        main_row = QWidget()
+        main_row.setStyleSheet("background: transparent;")
+        ml = QHBoxLayout(main_row)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(8)
+
+        txt = QWidget()
+        txt.setStyleSheet("background: transparent;")
+        tl = QVBoxLayout(txt)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(1)
+
+        t = QLabel("高分高亮")
+        if self.styles:
+            t.setStyleSheet(self.styles.param_title())
+        tl.addWidget(t)
+
+        h = QLabel("突出显示高评分内容")
+        if self.styles:
+            h.setStyleSheet(self.styles.hint_text())
+        tl.addWidget(h)
+
+        ml.addWidget(txt)
+        ml.addStretch()
+
+        sw = SwitchWidget(
+            checked=_safe_attr(self._orig_ui, "show_score_highlight", True)
+        )
+        self._controls.show_highlight_switch = sw
+        ml.addWidget(sw)
+        cl.addWidget(main_row)
+
+        # 子设置（阈值）
+        sub = QWidget()
+        sub.setStyleSheet("background: transparent;")
+        sub_l = QHBoxLayout(sub)
+        sub_l.setContentsMargins(20, 0, 0, 0)
+        sub_l.setSpacing(4)
+
+        enabled = sw.isChecked()
+
+        lbl1 = QLabel("分数 ≥")
+        if self.styles:
+            lbl1.setStyleSheet(self.styles.sub_text())
+        lbl1.setEnabled(enabled)
+        sub_l.addWidget(lbl1)
+
         spinbox = QSpinBox()
         spinbox.setRange(1, 100)
-        spinbox.setValue(getattr(ui, "high_score_threshold", 10))
-        spinbox.setFixedWidth(55)
-        spinbox.setEnabled(cb.isChecked())
-
-        if self.styles is not None:
-            spinbox.setStyleSheet(self.styles.spinbox())
-
-        self._controls["threshold_spinbox"] = spinbox
-        frame_layout.addWidget(spinbox)
-
-        label2 = QLabel(")")
-        if TOKENS is not None:
-            label2.setStyleSheet(
-                f"color: {TOKENS.colors.text_secondary}; font-size: 12px;"
-            )
-        frame_layout.addWidget(label2)
-
-        frame_layout.addStretch()
-        layout.addWidget(frame)
-
-        # 联动：复选框状态改变时更新 spinbox 的启用状态
-        cb.stateChanged.connect(
-            lambda s: spinbox.setEnabled(s == Qt.CheckState.Checked.value)
+        spinbox.setValue(
+            _safe_attr(self._orig_ui, "high_score_threshold", 10)
         )
+        spinbox.setFixedWidth(48)
+        spinbox.setFixedHeight(22)
+        spinbox.setEnabled(enabled)
+        if self.styles:
+            spinbox.setStyleSheet(self.styles.spinbox())
+        self._controls.threshold_spinbox = spinbox
+        sub_l.addWidget(spinbox)
 
-    def _create_button_bar(self, layout: QVBoxLayout) -> None:
-        """创建底部按钮栏。
+        lbl2 = QLabel("时突出显示")
+        if self.styles:
+            lbl2.setStyleSheet(self.styles.sub_text())
+        lbl2.setEnabled(enabled)
+        sub_l.addWidget(lbl2)
 
-        Args:
-            layout: 父布局。
-        """
-        frame = QFrame()
-        frame.setStyleSheet("background-color: transparent;")
-        frame_layout = QHBoxLayout(frame)
-        frame_layout.setContentsMargins(0, 15, 0, 10)
+        sub_l.addStretch()
+        cl.addWidget(sub)
 
-        # 恢复默认按钮
-        reset_btn = QPushButton("恢复默认")
-        reset_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        if self.styles is not None:
-            reset_btn.setStyleSheet(self.styles.button("default"))
-        reset_btn.clicked.connect(self._reset_defaults)
-        frame_layout.addWidget(reset_btn)
+        # 联动
+        sw.toggled.connect(spinbox.setEnabled)
+        sw.toggled.connect(lbl1.setEnabled)
+        sw.toggled.connect(lbl2.setEnabled)
 
-        frame_layout.addStretch()
+        layout.addWidget(container)
 
-        # 取消按钮
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        if self.styles is not None:
-            cancel_btn.setStyleSheet(self.styles.button("default"))
-        cancel_btn.clicked.connect(self.reject)
-        frame_layout.addWidget(cancel_btn)
+    # ================================================================
+    # 按钮栏
+    # ================================================================
 
-        frame_layout.addSpacing(8)
+    def _build_button_bar(self, layout: QVBoxLayout) -> None:
+        # 渐变分隔线
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(
+            "background: qlineargradient("
+            "x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, "
+            "stop:0.15 rgba(255, 255, 255, 0.08), "
+            "stop:0.85 rgba(255, 255, 255, 0.08), "
+            "stop:1 transparent);"
+        )
+        layout.addSpacing(8)
+        layout.addWidget(sep)
+        layout.addSpacing(10)
 
-        # 保存按钮
-        save_btn = QPushButton("保存并应用")
-        save_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        if self.styles is not None:
-            save_btn.setStyleSheet(self.styles.button("primary"))
-        save_btn.clicked.connect(self._save)
-        frame_layout.addWidget(save_btn)
+        bar = QFrame()
+        bar.setStyleSheet("background: transparent;")
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(12)
 
-        layout.addWidget(frame)
+        reset = QPushButton("恢复默认")
+        reset.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        if self.styles:
+            reset.setStyleSheet(self.styles.button("ghost"))
+        reset.clicked.connect(self._reset_defaults)
+        bl.addWidget(reset)
+
+        bl.addStretch()
+
+        cancel = QPushButton("取消")
+        cancel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        if self.styles:
+            cancel.setStyleSheet(self.styles.button("secondary"))
+        cancel.clicked.connect(self.reject)
+        bl.addWidget(cancel)
+
+        save = QPushButton("保存并应用")
+        save.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        if self.styles:
+            save.setStyleSheet(self.styles.button("primary"))
+        save.clicked.connect(self._save)
+        bl.addWidget(save)
+
+        layout.addWidget(bar)
+
+    # ================================================================
+    # 信号处理
+    # ================================================================
 
     def _on_custom_score_toggle(self, state: int) -> None:
-        """处理自定义分数切换事件。
-
-        Args:
-            state: 复选框状态值。
-        """
-        is_checked = state == Qt.CheckState.Checked.value
-        entry = self._controls.get("custom_score_entry")
+        # 使用 bool(state) 替代不可靠的 enum 比较
+        is_checked = bool(state)
+        entry = self._controls.custom_score_entry
+        group = self._controls.score_group
 
         if entry is not None:
             entry.setEnabled(is_checked)
 
-            if is_checked:
+        if is_checked:
+            # 取消所有预设
+            if group is not None:
+                group.setExclusive(False)
+                for btn in self._controls.score_buttons.values():
+                    btn.setChecked(False)
+                group.setExclusive(True)
+            if entry is not None:
                 entry.setFocus()
                 entry.selectAll()
-
-                # 取消预设按钮选中
-                group = self._controls.get("score_group")
-                if group is not None:
-                    group.setExclusive(False)
-                    for btn in self._controls.get("score_buttons", {}).values():
-                        btn.setChecked(False)
-                    group.setExclusive(True)
-            else:
+        else:
+            # 回到默认「不限」
+            btn_0 = self._controls.score_buttons.get(0)
+            if btn_0 is not None:
+                btn_0.setChecked(True)
+            if entry is not None:
                 entry.clear()
 
+    def _on_rating_toggled(self, key: str, checked: bool) -> None:
+        """防止取消最后一个评级。"""
+        if checked:
+            return
+
+        buttons = self._controls.rating_buttons
+        # 确保非空
+        assert buttons, "rating_buttons 不应为空"
+
+        others = any(b.isChecked() for k, b in buttons.items() if k != key)
+        if not others:
+            btn = buttons.get(key)
+            if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(True)
+                btn.blockSignals(False)
+
     def _connect_preview_signals(self) -> None:
-        """连接所有预览相关的信号。"""
-        # 创建防抖定时器
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._emit_preview)
 
-        def schedule_preview() -> None:
-            """调度预览更新。"""
+        def schedule() -> None:
             if self._preview_timer is not None:
                 self._preview_timer.start(self.PREVIEW_DEBOUNCE_MS)
 
-        # 连接评级按钮信号
-        for btn in self._controls.get("rating_buttons", {}).values():
-            btn.toggled.connect(schedule_preview)
+        # 评级按钮
+        for key, btn in self._controls.rating_buttons.items():
+            btn.toggled.connect(schedule)
+            btn.toggled.connect(
+                lambda c, k=key: self._on_rating_toggled(k, c)
+            )
 
-        # 连接滑块信号
-        slider_keys = [
+        # 滑块
+        for key in (
             "preload_slider",
             "cache_slider",
             "workers_slider",
             "timeout_slider",
-        ]
-        for key in slider_keys:
-            slider = self._controls.get(key)
-            if slider is not None:
-                slider.valueChanged.connect(schedule_preview)
+        ):
+            s = getattr(self._controls, key, None)
+            if s is not None:
+                s.valueChanged.connect(schedule)
 
-        # 连接复选框信号
-        checkbox_keys = ["high_first_cb", "show_badge_cb", "show_highlight_cb"]
-        for key in checkbox_keys:
-            cb = self._controls.get(key)
-            if cb is not None:
-                cb.stateChanged.connect(schedule_preview)
+        # Switch
+        for key in (
+            "high_first_switch",
+            "show_badge_switch",
+            "show_highlight_switch",
+        ):
+            sw = getattr(self._controls, key, None)
+            if sw is not None:
+                sw.toggled.connect(schedule)
 
-        # 连接输入框信号
-        entry = self._controls.get("custom_score_entry")
-        if entry is not None:
-            entry.textChanged.connect(schedule_preview)
+        # 自定义分数
+        if self._controls.custom_score_cb is not None:
+            self._controls.custom_score_cb.stateChanged.connect(schedule)
+        if self._controls.custom_score_entry is not None:
+            self._controls.custom_score_entry.textChanged.connect(schedule)
 
-        spinbox = self._controls.get("threshold_spinbox")
-        if spinbox is not None:
-            spinbox.valueChanged.connect(schedule_preview)
+        if self._controls.threshold_spinbox is not None:
+            self._controls.threshold_spinbox.valueChanged.connect(schedule)
 
     def _emit_preview(self) -> None:
-        """发射预览信号。"""
-        self.current_settings = self._collect_settings()
-        self.preview_requested.emit(self.current_settings)
+        try:
+            self.current_settings = self._collect_settings()
+            self.preview_requested.emit(self.current_settings)
+        except Exception:
+            logger.debug("预览设置收集失败", exc_info=True)
+
+    # ================================================================
+    # 设置收集
+    # ================================================================
 
     def _collect_settings(self) -> Any:
-        """收集当前所有设置值。
-
-        Returns:
-            包含所有设置的 UserSettings 对象。
-        """
-        if any(cls is None for cls in [FilterSettings, PerformanceSettings, UISettings]):
-            logger.warning("设置类不完整，返回原始设置")
-            return self.original_settings
-
-        # 获取分数设置
         min_score = self._get_min_score()
-
-        # 获取评级设置
         ratings = {
-            k
-            for k, btn in self._controls.get("rating_buttons", {}).items()
-            if btn.isChecked()
+            k for k, b in self._controls.rating_buttons.items() if b.isChecked()
         }
         if not ratings:
-            ratings = {"s", "q", "e"}  # 默认全选
+            ratings = {"s", "q", "e"}
 
-        # 构建筛选设置
-        high_first_cb = self._controls.get("high_first_cb")
-        filter_settings = FilterSettings(
-            min_score=min_score,
-            ratings=ratings,
-            high_score_first=(
-                high_first_cb.isChecked() if high_first_cb else True
-            ),
-        )
+        hf = self._controls.high_first_switch
+        try:
+            fs = self._FilterSettings(
+                min_score=min_score,
+                ratings=ratings,
+                high_score_first=hf.isChecked() if hf else True,
+            )
 
-        # 构建性能设置
-        perf_settings = PerformanceSettings(
-            preload_count=self._get_slider_value("preload_slider", 15),
-            max_image_cache=self._get_slider_value("cache_slider", 50),
-            download_workers=self._get_slider_value("workers_slider", 3),
-            load_timeout=self._get_slider_value("timeout_slider", 15),
-        )
+            ps = self._PerformanceSettings(
+                preload_count=self._slider_val("preload_slider", 15),
+                max_image_cache=self._slider_val("cache_slider", 50),
+                download_workers=self._slider_val("workers_slider", 3),
+                load_timeout=self._slider_val("timeout_slider", 15),
+            )
 
-        # 构建界面设置
-        show_badge_cb = self._controls.get("show_badge_cb")
-        show_highlight_cb = self._controls.get("show_highlight_cb")
-        threshold_spinbox = self._controls.get("threshold_spinbox")
+            badge_sw = self._controls.show_badge_switch
+            hl_sw = self._controls.show_highlight_switch
+            th_sp = self._controls.threshold_spinbox
 
-        ui_settings = UISettings(
-            show_saved_badge=(
-                show_badge_cb.isChecked() if show_badge_cb else True
-            ),
-            show_score_highlight=(
-                show_highlight_cb.isChecked() if show_highlight_cb else True
-            ),
-            high_score_threshold=(
-                threshold_spinbox.value() if threshold_spinbox else 10
-            ),
-        )
+            us = self._UISettings(
+                show_saved_badge=badge_sw.isChecked() if badge_sw else True,
+                show_score_highlight=hl_sw.isChecked() if hl_sw else True,
+                high_score_threshold=th_sp.value() if th_sp else 10,
+            )
 
-        return UserSettings(
-            filter=filter_settings,
-            performance=perf_settings,
-            ui=ui_settings,
-        )
+            return self._UserSettings(filter=fs, performance=ps, ui=us)
+        except Exception:
+            logger.error("构建设置对象失败", exc_info=True)
+            return self.original_settings
 
     def _get_min_score(self) -> int:
-        """获取当前最低分数设置。
-
-        Returns:
-            最低分数值。
-        """
-        custom_cb = self._controls.get("custom_score_cb")
-        if custom_cb is not None and custom_cb.isChecked():
-            try:
-                entry = self._controls.get("custom_score_entry")
-                if entry is not None:
-                    text = entry.text().strip()
-                    if text:
-                        value = int(text)
-                        return max(0, min(100, value))
-            except ValueError:
-                logger.debug("无效的自定义分数输入")
+        cb = self._controls.custom_score_cb
+        if cb is not None and cb.isChecked():
+            entry = self._controls.custom_score_entry
+            if entry is not None:
+                text = entry.text().strip()
+                if text:
+                    try:
+                        return _clamp(int(text), 0, 100)
+                    except (ValueError, TypeError):
+                        pass
             return 0
 
-        group = self._controls.get("score_group")
+        group = self._controls.score_group
         if group is not None:
-            checked_id = group.checkedId()
-            if checked_id != -1:
-                return checked_id
+            cid = group.checkedId()
+            if cid != -1:
+                return cid
 
         return 0
 
-    def _get_slider_value(self, key: str, default: int) -> int:
-        """安全获取滑块值。
-
-        Args:
-            key: 控件键名。
-            default: 默认值。
-
-        Returns:
-            滑块当前值或默认值。
-        """
-        slider = self._controls.get(key)
-        if slider is not None and hasattr(slider, "value"):
-            return slider.value()
+    def _slider_val(self, key: str, default: int) -> int:
+        s = getattr(self._controls, key, None)
+        if s is not None and hasattr(s, "value"):
+            return s.value()
         return default
 
+    # ================================================================
+    # 重置默认
+    # ================================================================
+
     def _reset_defaults(self) -> None:
-        """恢复所有设置为默认值。"""
-        if UserSettings is None:
-            logger.warning("UserSettings 类不可用，无法重置")
+        try:
+            d = self._UserSettings()
+        except Exception:
+            logger.error("创建默认设置失败", exc_info=True)
             return
 
-        defaults = UserSettings()
+        # 分数
+        btns = self._controls.score_buttons
+        ds = _safe_attr(self._orig_filter, "min_score", 0)
+        if ds in btns:
+            btns[ds].setChecked(True)
 
-        # 重置分数选择
-        score_buttons = self._controls.get("score_buttons", {})
-        default_score = defaults.filter.min_score
-        if default_score in score_buttons:
-            score_buttons[default_score].setChecked(True)
+        if self._controls.custom_score_cb is not None:
+            self._controls.custom_score_cb.setChecked(False)
+        if self._controls.custom_score_entry is not None:
+            self._controls.custom_score_entry.setEnabled(False)
+            self._controls.custom_score_entry.clear()
 
-        custom_cb = self._controls.get("custom_score_cb")
-        if custom_cb is not None:
-            custom_cb.setChecked(False)
+        # 评级
+        dr = _safe_attr(self._orig_filter, "ratings", {"s", "q", "e"})
+        for k, btn in self._controls.rating_buttons.items():
+            btn.setChecked(k in dr)
 
-        entry = self._controls.get("custom_score_entry")
-        if entry is not None:
-            entry.setEnabled(False)
-            entry.clear()
+        # 滑块
+        dp = _safe_attr(d, "performance")
+        for key, attr, fallback in (
+            ("preload_slider", "preload_count", 15),
+            ("cache_slider", "max_image_cache", 50),
+            ("workers_slider", "download_workers", 3),
+            ("timeout_slider", "load_timeout", 15),
+        ):
+            s = getattr(self._controls, key, None)
+            if s is not None:
+                s.setValue(_safe_attr(dp, attr, fallback))
 
-        # 重置评级选择
-        for k, btn in self._controls.get("rating_buttons", {}).items():
-            btn.setChecked(k in defaults.filter.ratings)
+        # Switch
+        df = _safe_attr(d, "filter")
+        du = _safe_attr(d, "ui")
+        for key, obj, attr, fallback in (
+            ("high_first_switch", df, "high_score_first", True),
+            ("show_badge_switch", du, "show_saved_badge", True),
+            ("show_highlight_switch", du, "show_score_highlight", True),
+        ):
+            sw = getattr(self._controls, key, None)
+            if sw is not None:
+                sw.setChecked(_safe_attr(obj, attr, fallback))
 
-        # 重置其他控件
-        control_defaults = [
-            ("high_first_cb", defaults.filter.high_score_first),
-            ("preload_slider", defaults.performance.preload_count),
-            ("cache_slider", defaults.performance.max_image_cache),
-            ("workers_slider", defaults.performance.download_workers),
-            ("timeout_slider", defaults.performance.load_timeout),
-            ("show_badge_cb", defaults.ui.show_saved_badge),
-            ("show_highlight_cb", defaults.ui.show_score_highlight),
-            ("threshold_spinbox", defaults.ui.high_score_threshold),
-        ]
-
-        for key, value in control_defaults:
-            control = self._controls.get(key)
-            if control is None:
-                continue
-
-            if isinstance(control, QCheckBox):
-                control.setChecked(value)
-            elif isinstance(control, (QSlider, QSpinBox)):
-                control.setValue(value)
-
-        # 更新阈值 spinbox 的启用状态
-        spinbox = self._controls.get("threshold_spinbox")
-        highlight_cb = self._controls.get("show_highlight_cb")
-        if spinbox is not None and highlight_cb is not None:
-            spinbox.setEnabled(highlight_cb.isChecked())
+        # 阈值
+        sp = self._controls.threshold_spinbox
+        if sp is not None:
+            sp.setValue(_safe_attr(du, "high_score_threshold", 10))
+            hl = self._controls.show_highlight_switch
+            if hl is not None:
+                sp.setEnabled(hl.isChecked())
 
         logger.debug("设置已重置为默认值")
 
+    # ================================================================
+    # 保存 / 取消
+    # ================================================================
+
     def reject(self) -> None:
-        """取消对话框并恢复原始设置。"""
-        self.preview_requested.emit(self.original_settings)
+        self._cleanup()
+        try:
+            self.preview_requested.emit(self.original_settings)
+        except RuntimeError:
+            logger.debug("reject 时预览信号发送失败", exc_info=True)
         super().reject()
 
     def _save(self) -> None:
-        """保存当前设置。"""
-        final_settings = self._collect_settings()
-        self.settings_saved.emit(final_settings)
+        final = self._collect_settings()
+        self.settings_saved.emit(final)
         logger.info("设置已保存")
+        self._cleanup()
         self.accept()
 
     def get_settings(self) -> Any:
-        """获取当前设置。
-
-        Returns:
-            当前的 UserSettings 实例。
-        """
         return self.current_settings
