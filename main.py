@@ -150,8 +150,12 @@ def setup_logging() -> logging.Logger:
 
     # 文件处理器
     try:
+        from config.app_config import get_data_dir
+
+        log_dir = get_data_dir()
+        log_path = str(log_dir / "yande_viewer.log")
         file_handler = logging.FileHandler(
-            "yande_viewer.log",
+            log_path,
             encoding="utf-8",
             delay=True,  # 延迟创建文件
         )

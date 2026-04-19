@@ -38,7 +38,7 @@ BACKUP_VERSION: str = "1.0"
 APP_VERSION: str = "2.0"
 
 # 默认备份目录名
-DEFAULT_BACKUP_DIR: str = "backup_temp"
+DEFAULT_BACKUP_DIR: str = "data/backup_temp"
 
 
 class BackupStats(TypedDict, total=False):
@@ -69,11 +69,11 @@ class BackupFileConfig(TypedDict):
 
 # 需要备份的文件配置列表
 BACKUP_FILES: list[BackupFileConfig] = [
-    {"key": "viewed", "filename": "viewed.json", "default": []},
-    {"key": "favorites", "filename": "favorites.json", "default": {}},
-    {"key": "browse_history", "filename": "browse_history.json", "default": []},
-    {"key": "session", "filename": "session.json", "default": {}},
-    {"key": "user_settings", "filename": "user_settings.json", "default": {}},
+    {"key": "viewed", "filename": "data/viewed.json", "default": []},
+    {"key": "favorites", "filename": "data/favorites.json", "default": {}},
+    {"key": "browse_history", "filename": "data/browse_history.json", "default": []},
+    {"key": "session", "filename": "data/session.json", "default": {}},
+    {"key": "user_settings", "filename": "data/user_settings.json", "default": {}},
 ]
 
 
@@ -115,10 +115,12 @@ class BackupManager:
 
         Args:
             base_path: 数据文件的基础目录路径。
-                如果为 None，则使用当前工作目录。
+                如果为 None，则使用项目根目录。
         """
         if base_path is None:
-            self.base_path = Path.cwd()
+            from config.app_config import get_project_root
+
+            self.base_path = get_project_root()
         elif isinstance(base_path, str):
             self.base_path = Path(base_path)
         else:

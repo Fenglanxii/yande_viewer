@@ -623,8 +623,8 @@ class ThumbnailTask(QRunnable):
                 if screen is not None:
                     return screen.devicePixelRatio()
         except Exception:
-            pass
-        return 1.0
+            self.signals.failed.emit(self.generation_id, self.path, str(e))
+
 
     def _generate_thumbnail(self) -> Optional[QImage]:
         """生成缩略图（返回 QImage，线程安全）。

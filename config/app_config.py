@@ -21,12 +21,47 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from .design_tokens import TOKENS, ColorTokens, DesignTokens
+
+
+# =============================================================================
+# 项目根目录与数据目录
+# =============================================================================
+
+# 项目根目录：config/ 的父目录（即 main.py 所在目录）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 数据目录：所有运行时数据文件的统一存放位置
+_DATA_DIR = _PROJECT_ROOT / "data"
+
+
+def get_data_dir() -> Path:
+    """获取数据目录的绝对路径，并确保其存在。
+
+    Returns
+    -------
+    Path
+        数据目录路径
+    """
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return _DATA_DIR
+
+
+def get_project_root() -> Path:
+    """获取项目根目录的绝对路径。
+
+    Returns
+    -------
+    Path
+        项目根目录路径
+    """
+    return _PROJECT_ROOT
 
 
 # =============================================================================
@@ -59,8 +94,10 @@ def _setup_logging() -> logging.Logger:
 
         # 文件处理器
         try:
+            log_dir = get_data_dir()
+            log_path = str(log_dir / "yande_viewer.log")
             file_handler = logging.FileHandler(
-                "yande_viewer.log",
+                log_path,
                 encoding="utf-8",
                 delay=True,
             )
@@ -214,12 +251,12 @@ class AppConfig:
 
     # 文件路径配置
     base_dir: str = "love"
-    history_file: str = "viewed.json"
-    favorites_file: str = "favorites.json"
-    browse_history_file: str = "browse_history.json"
-    session_file: str = "session.json"
-    settings_file: str = "user_settings.json"
-    config_file: str = "config.json"
+    history_file: str = "data/viewed.json"
+    favorites_file: str = "data/favorites.json"
+    browse_history_file: str = "data/browse_history.json"
+    session_file: str = "data/session.json"
+    settings_file: str = "data/user_settings.json"
+    config_file: str = "data/config.json"
 
     # API 配置
     api_url: str = "https://yande.re/post.json"
@@ -519,14 +556,14 @@ class AppConfig:
         Parameters
         ----------
         path : str, optional
-            配置文件路径，默认为 "config.json"
+            配置文件路径，默认为 "data/config.json"
 
         Returns
         -------
         AppConfig
             配置实例，加载失败时返回默认配置
         """
-        path = path or "config.json"
+        path = path or "data/config.json"
 
         if not os.path.exists(path):
             logger.info("配置文件未找到，使用默认配置")
@@ -663,12 +700,14 @@ class AppConfig:
         确保必要的目录存在。
 
         创建以下目录：
+        - data/（运行时数据目录）
         - base_dir
         - base_dir/Safe
         - base_dir/Questionable
         - base_dir/Explicit
         """
         dirs = [
+            "data",
             self.base_dir,
             os.path.join(self.base_dir, "Safe"),
             os.path.join(self.base_dir, "Questionable"),
@@ -712,11 +751,69 @@ class AppConfig:
 
 
 # =============================================================================
+# 数据迁移：从根目录迁移到 data/ 目录
+# =============================================================================
+
+# 需要迁移的旧数据文件列表（根目录下的裸文件名）
+_LEGACY_DATA_FILES = [
+    "viewed.json",
+    "favorites.json",
+    "browse_history.json",
+    "session.json",
+    "user_settings.json",
+    "config.json",
+    "yande_viewer.log",
+]
+
+
+def _migrate_legacy_data() -> None:
+    """将根目录下的旧数据文件迁移到 data/ 目录。
+
+    仅在 data/ 目录下不存在对应文件时才迁移，避免覆盖新数据。
+    迁移完成后删除根目录下的旧文件和对应的 .lock 文件。
+    """
+    data_dir = get_data_dir()
+    root = get_project_root()
+
+    migrated = False
+    for filename in _LEGACY_DATA_FILES:
+        src = root / filename
+        dst = data_dir / filename
+
+        # 仅当源文件存在且目标不存在时才迁移
+        if src.exists() and src.is_file() and not dst.exists():
+            try:
+                shutil.move(str(src), str(dst))
+                logger.info("已迁移数据文件: %s -> data/%s", filename, filename)
+                migrated = True
+            except (OSError, shutil.Error) as e:
+                logger.warning("迁移数据文件失败 [%s]: %s", filename, e)
+
+        # 清理根目录下的 .lock 文件
+        lock_src = root / (filename + ".lock")
+        if lock_src.exists():
+            try:
+                lock_src.unlink()
+                logger.debug("已清理锁文件: %s.lock", filename)
+            except OSError as e:
+                logger.debug("清理锁文件失败 [%s.lock]: %s", filename, e)
+
+    if migrated:
+        logger.info("数据文件迁移完成，所有数据已移至 data/ 目录")
+
+
+# =============================================================================
 # 全局实例
 # =============================================================================
 
 def _create_config() -> AppConfig:
     """创建并验证全局配置实例。"""
+    # 先执行数据迁移
+    try:
+        _migrate_legacy_data()
+    except Exception as e:
+        logger.warning("数据迁移失败: %s", e)
+
     config = AppConfig.load()
 
     errors = config.validate()

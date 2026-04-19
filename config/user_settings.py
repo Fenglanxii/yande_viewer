@@ -407,7 +407,7 @@ class UserSettings:
             ui=UISettings.from_dict(data.get("ui", {})),
         )
 
-    def save(self, path: str = "user_settings.json") -> bool:
+    def save(self, path: str = "data/user_settings.json") -> bool:
         """
         保存设置到文件。
 
@@ -416,7 +416,7 @@ class UserSettings:
         Parameters
         ----------
         path : str
-            保存路径，默认为 "user_settings.json"
+            保存路径，默认为 "data/user_settings.json"
 
         Returns
         -------
@@ -447,14 +447,14 @@ class UserSettings:
         return False
 
     @classmethod
-    def load(cls, path: str = "user_settings.json") -> "UserSettings":
+    def load(cls, path: str = "data/user_settings.json") -> "UserSettings":
         """
         从文件加载设置。
 
         Parameters
         ----------
         path : str
-            设置文件路径，默认为 "user_settings.json"
+            设置文件路径，默认为 "data/user_settings.json"
 
         Returns
         -------

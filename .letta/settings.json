@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd F:\\GitHub\\yande_viewer && python -c \"import py_compile; py_compile.compile('config/app_config.py', doraise=True); print('app_config.py OK')\")",
+      "Bash(cd F:\\GitHub\\yande_viewer && python -c \"import py_compile; py_compile.compile('config/user_settings.py', doraise=True); print('user_settings.py OK')\")",
+      "Bash(cd F:\\GitHub\\yande_viewer && python -c \"import py_compile; py_compile.compile('utils/backup_manager.py', doraise=True); print('backup_manager.py OK')\")",
+      "Bash(cd F:\\GitHub\\yande_viewer && python -c \"import py_compile; py_compile.compile('main.py', doraise=True); print('main.py OK')\")",
+      "Bash(python -c \"import py_compile; py_compile.compile(r'F:\\GitHub\\yande_viewer\\config\\app_config.py', doraise=True); print('app_config.py OK')\")",
+      "Bash(python -c \"import py_compile; py_compile.compile(r'F:\\GitHub\\yande_viewer\\config\\user_settings.py', doraise=True); print('user_settings.py OK')\")",
+      "Bash(python -c \"import py_compile; py_compile.compile(r'F:\\GitHub\\yande_viewer\\utils\\backup_manager.py', doraise=True); print('backup_manager.py OK')\")",
+      "Bash(python -c \"import py_compile; py_compile.compile(r'F:\\GitHub\\yande_viewer\\main.py', doraise=True); print('main.py OK')\")",
+      "Bash(python -c \"import py_compile; py_compile.compile(r'F:\\GitHub\\yande_viewer\\ui\\dialogs\\backup_dialog.py', doraise=True); print('backup_dialog.py OK')\")"
+    ]
+  }
+}

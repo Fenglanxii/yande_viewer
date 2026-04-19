@@ -50,7 +50,7 @@ except ImportError as e:
     raise ImportError(f"无法导入 design_tokens 模块: {e}") from e
 
 try:
-    from .app_config import AppConfig, CONFIG, DownloadConfig
+    from .app_config import AppConfig, CONFIG, DownloadConfig, get_data_dir, get_project_root
 except ImportError as e:
     raise ImportError(f"无法导入 app_config 模块: {e}") from e
 
@@ -84,6 +84,8 @@ __all__ = [
     "AppConfig",
     "CONFIG",
     "DownloadConfig",
+    "get_data_dir",
+    "get_project_root",
     # 用户设置
     "FilterSettings",
     "PerformanceSettings",

@@ -985,9 +985,8 @@ class BackupRestoreDialog(QDialog):
         """
         try:
             from utils.backup_manager import BackupManager
-            from config.app_config import CONFIG
 
-            self._backup_manager = BackupManager(str(CONFIG.base_dir))
+            self._backup_manager = BackupManager()
             logger.debug("BackupManager 初始化成功")
         except ImportError as e:
             logger.error("无法导入 BackupManager: %s", e)

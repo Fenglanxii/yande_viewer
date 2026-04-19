@@ -1,5 +1,6 @@
 __pycache__/
 love/
+data/
 build/
 dist/
 
@@ -12,4 +13,3 @@ yande_viewer.spec
 *.log
 *.tmp
 *.lock
-*.json
