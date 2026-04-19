@@ -3,6 +3,7 @@ love/
 data/
 build/
 dist/
+.letta
 
 project_copier.exe
 make.py
