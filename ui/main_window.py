@@ -48,12 +48,13 @@ from PyQt6.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut, QCursor
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -280,6 +281,10 @@ class MainWindow(QMainWindow):
         self._page: int = 1
         self.mode: int = MODE_LATEST
         self._empty_page_retries: int = 0
+        
+        # 已看跳过提示状态
+        self._viewed_skip_mode: bool = False
+        self._viewed_hint_suppress_count: int = 0
         
         # 缓存与后台服务
         self.image_cache = LRUCache(self.user_settings.performance.max_image_cache)
@@ -516,8 +521,26 @@ class MainWindow(QMainWindow):
         )
         dialog.exec()
         
-        self.mode = dialog.result if dialog.result else MODE_LATEST
+        # 映射对话框字符串结果到模式常量
+        mode_map = {"latest": MODE_LATEST, "continue": MODE_CONTINUE}
+        self.mode = mode_map.get(dialog.result, MODE_LATEST)
         self._start_with_mode()
+    
+    def _restore_browse_history(self) -> None:
+        """恢复上次的浏览历史和页码。"""
+        if self.saved_browse_history:
+            self.browse_history = list(self.saved_browse_history)
+        
+        if self.session:
+            # 恢复页码
+            saved_page = self.session.get('page', 1)
+            if isinstance(saved_page, int) and saved_page > 0:
+                self.page = saved_page
+            
+            # 恢复历史位置
+            saved_index = self.session.get('history_index', -1)
+            if isinstance(saved_index, int) and 0 <= saved_index < len(self.browse_history):
+                self.history_index = saved_index
     
     def _resume_tmp_downloads(self) -> None:
         """恢复未完成的下载任务。"""
@@ -873,6 +896,10 @@ class MainWindow(QMainWindow):
             self.mode = MODE_LATEST
             self.log("🆕 切换到最新模式", TOKENS.colors.info)
         
+        # 退出跳过提示状态
+        if self._viewed_skip_mode:
+            self._hide_viewed_hint()
+        
         self._update_mode_display()
     
     # =========================================================================
@@ -1134,6 +1161,88 @@ class MainWindow(QMainWindow):
         """)
         self.lbl_saved_badge.hide()
         
+        # 已看跳过提示条（含两个可点击按钮）
+        self._viewed_hint_frame = QFrame(self.main_frame)
+        self._viewed_hint_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(30, 33, 36, 0.92);
+                border: 1px solid rgba(255, 152, 0, 0.35);
+                border-radius: {L.radius_lg}px;
+            }}
+        """)
+        hint_layout = QHBoxLayout(self._viewed_hint_frame)
+        hint_layout.setContentsMargins(S.md, S.sm, S.sm, S.sm)
+        hint_layout.setSpacing(S.sm)
+        
+        # 左侧状态文字
+        self._viewed_hint_label = QLabel("👁 已看")
+        self._viewed_hint_label.setStyleSheet(f"""
+            color: #FF9800;
+            font-size: {T.size_md}px;
+            font-weight: bold;
+            background: transparent;
+            border: none;
+        """)
+        hint_layout.addWidget(self._viewed_hint_label)
+        
+        hint_layout.addStretch()
+        
+        # 「继续浏览」按钮
+        self._viewed_hint_continue = QPushButton("继续浏览")
+        self._viewed_hint_continue.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {C.text_muted};
+                font-size: {T.size_sm}px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: {L.radius_md}px;
+                padding: {S.xs}px {S.md}px;
+            }}
+            QPushButton:hover {{
+                color: {C.text_primary};
+                border-color: rgba(255, 255, 255, 0.3);
+                background-color: rgba(255, 255, 255, 0.06);
+            }}
+        """)
+        self._viewed_hint_continue.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._viewed_hint_continue.clicked.connect(self._hide_viewed_hint)
+        hint_layout.addWidget(self._viewed_hint_continue)
+        
+        # 「跳过已看」按钮
+        self._viewed_hint_skip = QPushButton("跳过已看 →")
+        self._viewed_hint_skip.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #FF9800;
+                color: #1E2124;
+                font-size: {T.size_sm}px;
+                font-weight: bold;
+                border: none;
+                border-radius: {L.radius_md}px;
+                padding: {S.xs}px {S.md}px;
+            }}
+            QPushButton:hover {{
+                background-color: #FFB74D;
+            }}
+        """)
+        self._viewed_hint_skip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._viewed_hint_skip.clicked.connect(self._skip_viewed_posts)
+        hint_layout.addWidget(self._viewed_hint_skip)
+        
+        self._viewed_hint_frame.hide()
+        
+        # 跳过着陆提示（跳过后短暂显示）
+        self._viewed_landing_label = QLabel("", self.main_frame)
+        self._viewed_landing_label.setStyleSheet(f"""
+            background-color: rgba(76, 175, 80, 0.9);
+            color: {C.text_primary};
+            font-size: {T.size_md}px;
+            font-weight: bold;
+            padding: {S.sm}px {S.lg}px;
+            border-radius: {L.radius_lg}px;
+        """)
+        self._viewed_landing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._viewed_landing_label.hide()
+        
         # 预加载状态指示器
         self.lbl_preload = QLabel("", self.main_frame)
         self.lbl_preload.setStyleSheet(f"""
@@ -1330,6 +1439,22 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'lbl_pos') and self.main_frame:
             x = (self.main_frame.width() - self.lbl_pos.width()) // 2
             self.lbl_pos.move(x, TOKENS.spacing.md)
+    
+    def _position_viewed_hint(self) -> None:
+        """将已看跳过提示条定位在图片区域底部居中。"""
+        if hasattr(self, '_viewed_hint_frame') and self.main_frame:
+            self._viewed_hint_frame.adjustSize()
+            x = (self.main_frame.width() - self._viewed_hint_frame.width()) // 2
+            y = self.main_frame.height() - self._viewed_hint_frame.height() - TOKENS.spacing.lg
+            self._viewed_hint_frame.move(x, y)
+    
+    def _position_landing_label(self) -> None:
+        """将跳过着陆提示定位在图片区域底部居中。"""
+        if hasattr(self, '_viewed_landing_label') and self.main_frame:
+            self._viewed_landing_label.adjustSize()
+            x = (self.main_frame.width() - self._viewed_landing_label.width()) // 2
+            y = self.main_frame.height() - self._viewed_landing_label.height() - TOKENS.spacing.lg
+            self._viewed_landing_label.move(x, y)
     
     def _center_loading_widget(self) -> None:
         """将加载动画组件居中显示。"""
@@ -1672,6 +1797,8 @@ class MainWindow(QMainWindow):
     # 导航功能
     # =========================================================================
     
+    VIEWED_HINT_SUPPRESS_COUNT: int = 5
+
     def next_image(self) -> None:
         """显示下一张图像。"""
         now = time.time()
@@ -1681,10 +1808,19 @@ class MainWindow(QMainWindow):
             self._trigger_preload(extra=5)
         self.last_next_time = now
         
+        # 提示条正在显示时，按下一张视为隐式"继续浏览"——正常前进一张并退出跳过模式
+        if self._viewed_skip_mode:
+            self._hide_viewed_hint()
+        
         # 浏览历史中的前进
         if self.history_index < len(self.browse_history) - 1:
             self.history_index += 1
-            self._show_post(self.browse_history[self.history_index])
+            post = self.browse_history[self.history_index]
+            self._show_post(post)
+            with self._state_lock():
+                is_viewed = str(post['id']) in self.viewed_ids
+            if is_viewed and not self._viewed_skip_mode and self._viewed_hint_suppress_count <= 0:
+                self._show_viewed_hint()
             return
         
         # 队列为空，请求更多
@@ -1699,19 +1835,106 @@ class MainWindow(QMainWindow):
         self.history_index = len(self.browse_history) - 1
         
         with self._state_lock():
-            self.viewed_ids.add(str(post['id']))
+            is_viewed = str(post['id']) in self.viewed_ids
+            if not is_viewed:
+                self.viewed_ids.add(str(post['id']))
         
         self._show_post(post)
+        
+        # 检测已看图，显示跳过提示
+        if is_viewed and self._viewed_hint_suppress_count <= 0:
+            self._show_viewed_hint()
+        
+        # 递减抑制计数
+        if self._viewed_hint_suppress_count > 0:
+            self._viewed_hint_suppress_count -= 1
         
         # 队列不足时预加载
         if len(self.post_queue) < 20:
             self.load_more_posts()
+    
+    def _show_viewed_hint(self) -> None:
+        """显示已看图片跳过提示条。"""
+        self._viewed_skip_mode = True
+        self._viewed_hint_frame.show()
+        self._position_viewed_hint()
+    
+    def _hide_viewed_hint(self) -> None:
+        """隐藏已看图片跳过提示条（用户选择继续浏览）。"""
+        self._viewed_skip_mode = False
+        self._viewed_hint_frame.hide()
+        self._viewed_hint_suppress_count = self.VIEWED_HINT_SUPPRESS_COUNT
+    
+    def _show_landing_hint(self, skipped: int) -> None:
+        """跳过后显示着陆提示，短暂停留后自动消失。"""
+        self._viewed_landing_label.setText(f"✓ 跳过 {skipped} 张 · 已到达新图")
+        self._viewed_landing_label.show()
+        self._position_landing_label()
+        # 1.5秒后自动隐藏
+        QTimer.singleShot(1500, self._viewed_landing_label.hide)
+    
+    def _skip_viewed_posts(self) -> None:
+        """跳过连续的已看图片，直到遇到未看图或无更多内容。"""
+        self._viewed_hint_suppress_count = 0
+        skipped = 0
+        
+        # 阶段1：在浏览历史中向前跳过
+        while self.history_index < len(self.browse_history) - 1:
+            next_idx = self.history_index + 1
+            next_post = self.browse_history[next_idx]
+            with self._state_lock():
+                is_viewed = str(next_post['id']) in self.viewed_ids
+            
+            if not is_viewed:
+                self.history_index = next_idx
+                self._hide_viewed_hint()
+                self._show_post(next_post)
+                if skipped > 0:
+                    self._show_landing_hint(skipped)
+                return
+            
+            self.history_index = next_idx
+            skipped += 1
+        
+        # 阶段2：浏览历史已到末尾，从队列中跳过
+        while self.post_queue:
+            post = self.post_queue.popleft()
+            with self._state_lock():
+                is_viewed = str(post['id']) in self.viewed_ids
+            
+            if not is_viewed:
+                self.browse_history.append(post)
+                self.history_index = len(self.browse_history) - 1
+                with self._state_lock():
+                    self.viewed_ids.add(str(post['id']))
+                self._hide_viewed_hint()
+                self._show_post(post)
+                
+                if skipped > 0:
+                    self._show_landing_hint(skipped)
+                
+                if len(self.post_queue) < 20:
+                    self.load_more_posts()
+                return
+            
+            skipped += 1
+        
+        # 队列空了还没找到未看图
+        self._hide_viewed_hint()
+        if skipped > 0:
+            self._show_landing_hint(skipped)
+        self.log("📭 正在获取更多...", TOKENS.colors.warning)
+        self.load_more_posts()
     
     def prev_image(self) -> None:
         """显示上一张图像。"""
         if self.history_index <= 0:
             self.log("⚠ 已是第一张", TOKENS.colors.warning)
             return
+        
+        # 往回翻时退出跳过模式
+        if self._viewed_skip_mode:
+            self._hide_viewed_hint()
         
         self.history_index -= 1
         self._show_post(self.browse_history[self.history_index])
@@ -1754,6 +1977,7 @@ class MainWindow(QMainWindow):
         cached = self.image_cache.get(pid)
         
         if cached:
+            self.hide_loading()
             self.original_pil_image = cached
             self.do_resize()
             self._trigger_preload()
@@ -1997,6 +2221,12 @@ class MainWindow(QMainWindow):
         
         # 居中位置标签
         self._center_pos_label()
+        
+        # 重新定位已看跳过提示
+        if self._viewed_skip_mode:
+            self._position_viewed_hint()
+        if hasattr(self, '_viewed_landing_label') and self._viewed_landing_label.isVisible():
+            self._position_landing_label()
         
         # 防抖调整图片（延迟执行以避免频繁重绘）
         if self.original_pil_image:
